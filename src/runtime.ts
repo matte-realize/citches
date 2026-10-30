@@ -2,12 +2,12 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { Aggregator } from "./aggregate/aggregator.js";
 import { config } from "./config.js";
 import { EventMapper } from "./events/mapper.js";
-import type { Aggregate, ChatMessage, MessageSource, SimEvent } from "./types.js";
+import type { Aggregate, ChatMessage, CommunityProgress, MessageSource, SimEvent } from "./types.js";
 
 export async function run(source: MessageSource) {
   const wss = new WebSocketServer({ port: config.websocketPort });
   const clients = new Set<WebSocket>();
-  const history: Array<{ type: "tick"; aggregate: Aggregate; events: SimEvent[] }> = [];
+  const history: Array<{ type: "tick"; aggregate: Aggregate; events: SimEvent[]; progress: CommunityProgress }> = [];
   wss.on("connection", socket => {
     clients.add(socket);
     socket.on("close", () => clients.delete(socket));
@@ -22,7 +22,7 @@ export async function run(source: MessageSource) {
     console.log("counts", aggregate.counts, `messages/sec=${aggregate.messagesPerSecond.toFixed(2)}`);
     const events = eventMapper.map(aggregate, deltaCounts, deltaRaidViewers, growthSignals);
     for (const event of events) console.log("sim event", JSON.stringify(event));
-    const tick = { type: "tick" as const, aggregate, events };
+    const tick = { type: "tick" as const, aggregate, events, progress: eventMapper.progress };
     if (events.length) {
       history.push(tick);
       if (history.length > config.websocketHistoryLimit) history.splice(0, history.length - config.websocketHistoryLimit);

@@ -8,7 +8,8 @@ export const config = {
   spam: { emoteRatio: 0.6, repeatedCharacterLength: 5, maxShortMessageLength: 4, shortRepeatMinimum: 3 },
   events: {
     rateReference: 4, countMultiplier: 1, intensityMultiplier: 1,
-    raidMinimumViewers: 1, disasterThreshold: 2, fireworksThreshold: 1
+    raidMinimumViewers: 1, disasterThreshold: 2, fireworksThreshold: 1,
+    destroyedBuildingsPerIntensity: 2.4, burnDurationMs: 3500
   },
   growth: {
     progressThreshold: 1.4, landmarkThreshold: 2.1,
@@ -27,6 +28,11 @@ export const config = {
     ],
     chatPoint: 0.12, complexityPoint: 0.42, positivityPoint: 0.7,
     supportPointMultiplier: 3.5
+  },
+  recovery: {
+    basePoints: 24, pointsPerIntensity: 20,
+    supportPointMultiplier: 6, positiveMessagePoints: 1, complexityPoint: 0.2,
+    eraLossPerIntensity: 4, maxEraLoss: 2
   },
   support: {
     bitsPerPoint: 100, subscriptionPoints: 2.5, giftPoints: 3.5,

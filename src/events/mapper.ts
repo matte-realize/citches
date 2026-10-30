@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import type { GrowthSignals } from "../aggregate/aggregator.js";
-import type { Aggregate, Counts, SimEvent } from "../types.js";
+import type { Aggregate, CommunityProgress, Counts, SimEvent } from "../types.js";
 
 export class EventMapper {
   private readonly sessionStartedAt = Date.now();
@@ -8,7 +8,35 @@ export class EventMapper {
   private landmarkProgress = 0;
   private technologyProgress = 0;
   private technologyEra = 0;
+  private recoveryActive = false;
+  private recoveryEra = 0;
+  private recoveryProgress = 0;
+  private recoveryGoal = 0;
   private lastBuildAt = 0;
+
+  get progress(): CommunityProgress {
+    const milestones = config.technology.milestones;
+    const next = milestones[this.technologyEra];
+    const previousGoal = this.technologyEra > 0 ? milestones[this.technologyEra - 1].points : 0;
+    const technologyGoal = next ? next.points - previousGoal : 1;
+    const technologyCurrent = next ? Math.min(technologyGoal, Math.max(0, this.technologyProgress - previousGoal)) : 1;
+    return {
+      technology: {
+        era: this.technologyEra,
+        name: next?.name ?? "EMPIRE COMPLETE",
+        current: technologyCurrent,
+        goal: technologyGoal,
+        ratio: technologyGoal > 0 ? technologyCurrent / technologyGoal : 1
+      },
+      recovery: {
+        active: this.recoveryActive,
+        era: this.recoveryEra,
+        current: this.recoveryProgress,
+        goal: this.recoveryGoal,
+        ratio: this.recoveryGoal > 0 ? Math.min(1, this.recoveryProgress / this.recoveryGoal) : 0
+      }
+    };
+  }
 
   map(aggregate: Aggregate, delta: Counts, deltaRaidViewers: number, signals: GrowthSignals): SimEvent[] {
     const rateScale = Math.max(1, aggregate.messagesPerSecond / config.events.rateReference);
@@ -33,6 +61,18 @@ export class EventMapper {
     }
     this.houseProgress += signals.supportPoints * config.support.growthMultiplier;
     this.technologyProgress += signals.supportPoints * config.technology.supportPointMultiplier;
+
+    if (this.recoveryActive) {
+      const recovery = config.recovery;
+      this.recoveryProgress += signals.supportPoints * recovery.supportPointMultiplier
+        + signals.positiveMessages * recovery.positiveMessagePoints
+        + signals.complexityTotal * recovery.complexityPoint;
+      if (this.recoveryProgress >= this.recoveryGoal) {
+        this.recoveryProgress = this.recoveryGoal;
+        this.recoveryActive = false;
+        this.recoveryEra = this.technologyEra;
+      }
+    }
 
     while (this.technologyEra < config.technology.milestones.length
       && this.technologyProgress >= config.technology.milestones[this.technologyEra].points) {
@@ -60,8 +100,30 @@ export class EventMapper {
     if (delta.SPAM >= config.events.fireworksThreshold) events.push({ type: "effect", kind: "fireworks", intensity: intensity(delta.SPAM) });
     if (delta.RAID && deltaRaidViewers >= config.events.raidMinimumViewers) events.push({ type: "boom", viewers: deltaRaidViewers });
     if (aggregate.counts.HATE >= config.events.disasterThreshold && delta.HATE > 0) {
-      events.push({ type: "disaster", kind: Math.random() < 0.5 ? "fire" : "meteor", intensity: intensity(delta.HATE) });
+      const disasterIntensity = intensity(delta.HATE);
+      events.push({
+        type: "disaster",
+        kind: Math.random() < 0.5 ? "fire" : "meteor",
+        intensity: disasterIntensity,
+        damageCount: Math.max(1, Math.ceil(disasterIntensity * config.events.destroyedBuildingsPerIntensity)),
+        durationMs: config.events.burnDurationMs
+      });
+      this.startRecovery(disasterIntensity);
     }
     return events;
+  }
+
+  private startRecovery(intensity: number) {
+    const recovery = config.recovery;
+    const previousRecoveryEra = this.recoveryActive ? this.recoveryEra : this.technologyEra;
+    if (!this.recoveryActive) {
+      this.recoveryProgress = 0;
+      this.recoveryGoal = 0;
+    }
+    const eraLoss = Math.min(recovery.maxEraLoss, Math.max(1, Math.ceil(intensity / recovery.eraLossPerIntensity)));
+    this.recoveryEra = Math.min(previousRecoveryEra, Math.max(0, this.technologyEra - eraLoss));
+    this.recoveryGoal += recovery.basePoints + intensity * recovery.pointsPerIntensity;
+    this.recoveryProgress = Math.max(0, this.recoveryProgress - intensity * 2);
+    this.recoveryActive = true;
   }
 }
