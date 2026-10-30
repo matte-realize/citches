@@ -1,0 +1,25 @@
+{
+  "name": "chat-city",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "live": "node --import tsx/esm src/live.ts",
+    "replay": "node --import tsx/esm src/replay.ts",
+    "dev:web": "vite --host 0.0.0.0",
+    "build:web": "tsc -p web/tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixi.js": "^8.6.6",
+    "tmi.js": "^1.8.5",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}
