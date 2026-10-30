@@ -18,15 +18,15 @@ export const config = {
   },
   technology: {
     milestones: [
-      { name: "VILLAGE & FARMING", points: 65 },
-      { name: "BRONZE & MASONRY", points: 180 },
-      { name: "CLASSICAL KINGDOM", points: 360 },
+      { name: "HUTS & GATHERING", points: 65 },
+      { name: "SETTLED HOMES", points: 180 },
+      { name: "STONE CITY", points: 360 },
       { name: "INDUSTRIAL CITY", points: 650 },
       { name: "AGE OF AIRSHIPS", points: 1000 },
       { name: "EMPIRE", points: 1450 }
     ],
     chatPoint: 0.12, complexityPoint: 0.42, positivityPoint: 0.7,
-    supportPointMultiplier: 1.3
+    supportPointMultiplier: 3.5
   },
   support: {
     bitsPerPoint: 100, subscriptionPoints: 2.5, giftPoints: 3.5,

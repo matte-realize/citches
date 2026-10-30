@@ -5,8 +5,9 @@ import type { SimEvent } from "../src/types.js";
 type TileKind = "empty" | "house" | "landmark" | "fire";
 type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number };
 type Particle = { mesh: Mesh; velocity: Vector3; life: number; maxLife: number; gravity: number };
-type PathSegment = { mesh: Mesh; length: number; horizontal: boolean };
-type CivicActor = { group: Group; kind: "animal" | "wagon" | "car" | "blimp"; x: number; z: number; phase: number; range: number };
+type PathSegment = { mesh: Mesh; start: Vector3; end: Vector3; length: number; horizontal: boolean; motorable: boolean };
+type CivicActor = { group: Group; kind: "person" | "animal" | "wagon" | "car" | "blimp"; x: number; z: number; phase: number; range: number; walks?: boolean; route?: Vector3[]; routeProgress?: number };
+type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
 
 const GRID = 32;
 export const CITY_THEMES = {
@@ -33,8 +34,14 @@ export class ChatCity {
   private tileByCoord = new Map<string, Tile>();
   private particles: Particle[] = [];
   private paths: PathSegment[] = [];
+  private automotiveRoads: Mesh[] = [];
+  private pathTiles = new Set<string>();
+  private actorTiles = new Set<string>();
+  private pathEdges: Array<[string, string]> = [];
   private actors: CivicActor[] = [];
   private actorClock = 0;
+  private campfire?: Group;
+  private renewalComplete = false;
   private activeRadius = 4.5;
   private totalBuildings = 0;
   private technologyEra = 0;
@@ -69,7 +76,7 @@ export class ChatCity {
     this.makeGround();
     this.makeTiles();
     this.setActiveRadius(this.activeRadius);
-    this.seedFoundingHall();
+    this.seedFoundingCamp();
     this.frameCamera();
     this.resize();
     window.addEventListener("resize", this.resize);
@@ -176,7 +183,7 @@ export class ChatCity {
   private get eraIndex(): number { return this.technologyEra; }
 
   get stage(): string {
-    return ["FOUNDING VILLAGE", "VILLAGE & FARMING", "BRONZE & MASONRY", "CLASSICAL KINGDOM", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE"][this.eraIndex];
+    return ["CAMPFIRE SETTLEMENT", "HUTS & GATHERING", "SETTLED HOMES", "STONE CITY", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE"][this.eraIndex];
   }
 
   get themeName(): string { return this.theme.label.toUpperCase(); }
@@ -212,11 +219,70 @@ export class ChatCity {
     this.root.add(this.plotBorder);
   }
 
-  private seedFoundingHall() {
+  private seedFoundingCamp() {
     const tile = this.tileByCoord.get(this.key(15, 15));
     if (!tile) return;
-    this.makeLandmark(tile);
-    this.totalBuildings = 1;
+    this.campfire = new Group();
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4;
+      const stone = new Mesh(new IcosahedronGeometry(0.09, 0), mat(i % 2 ? 0x756c55 : 0x928269));
+      stone.scale.set(1.2, 0.68, 0.9);
+      stone.position.set(Math.cos(angle) * 0.28, 0.015, Math.sin(angle) * 0.28);
+      this.campfire.add(stone);
+    }
+    const log = new Mesh(new CylinderGeometry(0.05, 0.06, 0.46, 6), mat(0x493321, 1));
+    log.rotation.z = Math.PI / 2; log.rotation.y = 0.5; log.position.y = 0.07; this.campfire.add(log);
+    const crossingLog = log.clone(); crossingLog.rotation.y = -0.55; this.campfire.add(crossingLog);
+    for (let i = 0; i < 4; i++) {
+      const flame = new Mesh(new ConeGeometry(0.13 - i * 0.018, 0.35 + i * 0.055, 7), mat(i % 2 ? 0xff8d32 : 0xffd36b, 0.4, { emissive: 0xff5718, emissiveIntensity: 2.0 }));
+      flame.position.set((this.random() - 0.5) * 0.12, 0.26 + i * 0.025, (this.random() - 0.5) * 0.12);
+      flame.userData.firePhase = i * 1.2;
+      this.campfire.add(flame);
+    }
+    for (const tree of tile.trees) tile.group.remove(tree);
+    tile.trees = [];
+    tile.group.add(this.campfire);
+    tile.kind = "landmark";
+    const hearthPath = this.tileByCoord.get(this.key(tile.x, tile.z + 1));
+    if (hearthPath) {
+      for (const tree of hearthPath.trees) hearthPath.group.remove(tree);
+      hearthPath.trees = [];
+      this.pathTiles.add(this.key(hearthPath.x, hearthPath.z));
+      this.addPathSegment(
+        new Vector3(hearthPath.group.position.x, 0.014, hearthPath.group.position.z),
+        new Vector3(tile.group.position.x, 0.014, tile.group.position.z + 0.38)
+      );
+    }
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const clearing = this.tileByCoord.get(this.key(tile.x + dx, tile.z + dz));
+      if (!clearing || clearing === tile || clearing === hearthPath) continue;
+      this.actorTiles.add(this.key(clearing.x, clearing.z));
+      for (const tree of clearing.trees) clearing.group.remove(tree);
+      clearing.trees = [];
+    }
+    for (let i = 0; i < 4; i++) this.addPerson(tile, i);
+  }
+
+  private addPerson(tile: Tile, index: number, walking = false) {
+    const person = new Group();
+    const tunics = [0x846342, 0x75644b, 0x9a714d, 0x695849];
+    const body = new Mesh(new CylinderGeometry(0.07, 0.105, 0.29, 6), mat(tunics[index % tunics.length], 1));
+    body.position.y = 0.25; person.add(body);
+    const head = new Mesh(new SphereGeometry(0.07, 7, 6), mat(0xb9815c, 1));
+    head.position.y = 0.46; person.add(head);
+    const hair = new Mesh(new SphereGeometry(0.072, 7, 5), mat(0x392d23, 1));
+    hair.scale.set(1.04, 0.55, 1.04); hair.position.y = 0.5; person.add(hair);
+    for (const x of [-0.095, 0.095]) {
+      const arm = new Mesh(new CylinderGeometry(0.025, 0.03, 0.25, 5), mat(0xb9815c, 1));
+      arm.position.set(x, 0.27, 0); arm.rotation.z = x < 0 ? -0.18 : 0.18; person.add(arm);
+      const leg = new Mesh(new CylinderGeometry(0.027, 0.032, 0.19, 5), mat(0x44382d, 1));
+      leg.position.set(x * 0.42, 0.09, 0); person.add(leg);
+    }
+    const angle = index * Math.PI / 2 + Math.PI / 4;
+    const radius = 0.8 + (index % 2) * 0.14;
+    const pathOrigin = walking ? this.findPathOrigin(tile.group.position.x, tile.group.position.z) : undefined;
+    this.addActor(person, "person", pathOrigin?.x ?? tile.group.position.x + Math.cos(angle) * radius, pathOrigin?.z ?? tile.group.position.z + Math.sin(angle) * radius, walking ? 0 : 0.06, walking);
+    person.rotation.y = Math.atan2(-Math.cos(angle), -Math.sin(angle));
   }
 
   private expandPlot() {
@@ -224,60 +290,167 @@ export class ChatCity {
     this.setActiveRadius(Math.min(15.5, this.activeRadius + 2));
   }
 
-  private addPathSegment(from: Vector3, to: Vector3) {
+  private addPathSegment(from: Vector3, to: Vector3, motorable = false) {
     const dx = to.x - from.x;
     const dz = to.z - from.z;
-    if (Math.abs(dx) + Math.abs(dz) < 0.5) return;
+    if (Math.abs(dx) + Math.abs(dz) < 0.08) return;
     const horizontal = Math.abs(dx) >= Math.abs(dz);
-    const length = Math.max(0.22, Math.abs(horizontal ? dx : dz));
+    const length = Math.max(0.08, Math.abs(horizontal ? dx : dz));
     const mesh = new Mesh(new BoxGeometry(1, 0.018, 1), mat(this.theme.road[0], 1));
     mesh.position.set((from.x + to.x) / 2, 0.014, (from.z + to.z) / 2);
     this.root.add(mesh);
-    this.paths.push({ mesh, length, horizontal });
-    this.stylePath(mesh, length, horizontal);
+    const segment = { mesh, start: from.clone(), end: to.clone(), length, horizontal, motorable };
+    this.paths.push(segment);
+    this.stylePath(segment);
+    if (motorable && this.technologyEra >= 4) this.addAutomotiveRoad(segment);
   }
 
-  private stylePath(mesh: Mesh, length: number, horizontal: boolean) {
+  private stylePath(path: PathSegment) {
     const era = this.technologyEra;
-    const width = era < 2 ? 0.1 + era * 0.025 : era === 2 ? 0.16 : era === 3 ? 0.21 : 0.27;
+    const width = era < 2 ? 0.1 + era * 0.025 : 0.14;
+    const { mesh, length, horizontal } = path;
     mesh.geometry.dispose();
     mesh.geometry = new BoxGeometry(horizontal ? length : width, 0.018, horizontal ? width : length);
+    const offset = era >= 4 ? 0.32 : 0;
+    mesh.position.set((path.start.x + path.end.x) / 2 + (horizontal ? 0 : offset), 0.014, (path.start.z + path.end.z) / 2 + (horizontal ? offset : 0));
     const surface = era < 2 ? (era === 0 ? 0x79623e : 0x8c7955)
       : era === 2 ? 0x807c6c
-      : era === 3 ? this.theme.road[0]
-      : this.theme.road[1];
+      : 0xaaa18a;
     const material = mesh.material as MeshStandardMaterial;
     material.color.setHex(surface);
     material.roughness = era < 3 ? 1 : 0.82;
   }
 
-  private connectNewBuilding(tile: Tile) {
-    const existing = this.tiles.filter(other => other !== tile && other.building && other.kind !== "fire");
-    if (!existing.length) return;
-    const target = new Vector3(tile.group.position.x, 0.014, tile.group.position.z);
-    const sourceTile = existing.reduce((nearest, other) => {
-      const distance = Math.abs(tile.x - other.x) + Math.abs(tile.z - other.z);
-      const nearestDistance = Math.abs(tile.x - nearest.x) + Math.abs(tile.z - nearest.z);
-      return distance < nearestDistance ? other : nearest;
-    });
-    const source = new Vector3(sourceTile.group.position.x, 0.014, sourceTile.group.position.z);
-    const corner = new Vector3(target.x, 0.014, source.z);
-    this.addPathSegment(source, corner);
-    this.addPathSegment(corner, target);
+  private accessNeighbors(tile: Tile) {
+    return [
+      { dx: 0, dz: 1, yaw: 0 },
+      { dx: 1, dz: 0, yaw: Math.PI / 2 },
+      { dx: 0, dz: -1, yaw: Math.PI },
+      { dx: -1, dz: 0, yaw: -Math.PI / 2 }
+    ].map(direction => ({ ...direction, tile: this.tileByCoord.get(this.key(tile.x + direction.dx, tile.z + direction.dz)) }));
+  }
+
+  private findRouteToPath(start: Tile, blocked?: Tile): Tile[] | undefined {
+    const startKey = this.key(start.x, start.z);
+    const queue = [start];
+    const previous = new Map<string, string | undefined>([[startKey, undefined]]);
+    const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]] as const;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const current = queue[cursor];
+      const currentKey = this.key(current.x, current.z);
+      if (this.pathTiles.has(currentKey)) {
+        const route: Tile[] = [];
+        let key: string | undefined = currentKey;
+        while (key !== undefined) {
+          const cell = this.tileByCoord.get(key);
+          if (cell) route.push(cell);
+          key = previous.get(key);
+        }
+        return route.reverse();
+      }
+      for (const [dx, dz] of directions) {
+        const next = this.tileByCoord.get(this.key(current.x + dx, current.z + dz));
+        if (!next || next === blocked || !next.group.visible || next.building) continue;
+        if (this.actorTiles.has(this.key(next.x, next.z))) continue;
+        if (next.kind !== "empty" && !this.pathTiles.has(this.key(next.x, next.z))) continue;
+        const nextKey = this.key(next.x, next.z);
+        if (previous.has(nextKey)) continue;
+        previous.set(nextKey, currentKey);
+        queue.push(next);
+      }
+    }
+    return undefined;
+  }
+
+  private findAccessPlan(tile: Tile): AccessPlan | undefined {
+    let best: AccessPlan | undefined;
+    for (const direction of this.accessNeighbors(tile)) {
+      const access = direction.tile;
+      if (!access || !access.group.visible || access.building || this.actorTiles.has(this.key(access.x, access.z))) continue;
+      const accessKey = this.key(access.x, access.z);
+      if (access.kind !== "empty" && !this.pathTiles.has(accessKey)) continue;
+      const route = this.findRouteToPath(access, tile);
+      if (route && (!best || route.length < best.route.length)) best = { dx: direction.dx, dz: direction.dz, yaw: direction.yaw, route };
+    }
+    return best;
+  }
+
+  private connectNewBuilding(tile: Tile, building: Group): boolean {
+    const access = this.findAccessPlan(tile);
+    if (!access) return false;
+    building.rotation.y = access.yaw;
+
+    const center = new Vector3(tile.group.position.x, 0.014, tile.group.position.z);
+    const threshold = center.clone().add(new Vector3(access.dx * 0.49, 0, access.dz * 0.49));
+    const routeStart = access.route[0];
+    for (const tree of routeStart.trees) routeStart.group.remove(tree);
+    routeStart.trees = [];
+    const routePosition = new Vector3(routeStart.group.position.x, 0.014, routeStart.group.position.z);
+    this.addPathSegment(threshold, routePosition);
+    this.pathTiles.add(this.key(routeStart.x, routeStart.z));
+    for (let i = 1; i < access.route.length; i++) {
+      const from = access.route[i - 1];
+      const to = access.route[i];
+      for (const tree of to.trees) to.group.remove(tree);
+      to.trees = [];
+      this.addPathSegment(
+        new Vector3(from.group.position.x, 0.014, from.group.position.z),
+        new Vector3(to.group.position.x, 0.014, to.group.position.z),
+        true
+      );
+      this.pathTiles.add(this.key(to.x, to.z));
+    }
+    this.refreshActorRoutes();
+    return true;
   }
 
   private upgradePaths() {
-    for (const path of this.paths) this.stylePath(path.mesh, path.length, path.horizontal);
+    for (const path of this.paths) this.stylePath(path);
+    if (this.technologyEra >= 4) this.buildAutomotiveRoads();
   }
 
-  private addActor(group: Group, kind: CivicActor["kind"], x: number, z: number, range = 1.2) {
+  private addAutomotiveRoad(path: PathSegment) {
+    const { start, end, length, horizontal } = path;
+    const road = new Mesh(new BoxGeometry(horizontal ? length : 0.44, 0.024, horizontal ? 0.44 : length), mat(this.theme.road[2], 0.96));
+    road.position.set((start.x + end.x) / 2, 0.022, (start.z + end.z) / 2);
+    road.receiveShadow = true;
+    this.root.add(road);
+    this.automotiveRoads.push(road);
+    if (length > 0.7) {
+      const dash = new Mesh(new BoxGeometry(horizontal ? 0.36 : 0.025, 0.008, horizontal ? 0.025 : 0.36), mat(0xc5ab6b, 0.9));
+      dash.position.set((start.x + end.x) / 2, 0.036, (start.z + end.z) / 2);
+      this.root.add(dash);
+      this.automotiveRoads.push(dash);
+    }
+  }
+
+  private buildAutomotiveRoads() {
+    for (const road of this.automotiveRoads) {
+      this.root.remove(road);
+      this.disposeTree(road);
+    }
+    this.automotiveRoads = [];
+    for (const path of this.paths) if (path.motorable) this.addAutomotiveRoad(path);
+  }
+
+  private addActor(group: Group, kind: CivicActor["kind"], x: number, z: number, range = 1.2, walks = false) {
     group.position.set(x, kind === "blimp" ? 5.1 : 0.02, z);
     this.root.add(group);
-    this.actors.push({ group, kind, x, z, phase: this.random() * Math.PI * 2, range });
+    const actor: CivicActor = { group, kind, x, z, phase: this.random() * Math.PI * 2, range, walks };
+    if (kind === "wagon" || kind === "car" || (kind === "person" && walks)) actor.route = this.buildActorRoute(x, z);
+    this.actors.push(actor);
   }
 
   private addAnimal(tile: Tile) {
     if (this.actors.filter(actor => actor.kind === "animal").length >= 8) return;
+    const pasture = this.tiles
+      .filter(cell => cell.group.visible && cell.kind === "empty" && !cell.building && !this.pathTiles.has(this.key(cell.x, cell.z)) && !this.actorTiles.has(this.key(cell.x, cell.z)))
+      .filter(cell => Math.abs(cell.x - tile.x) + Math.abs(cell.z - tile.z) <= 2)
+      .sort((a, b) => (Math.abs(a.x - tile.x) + Math.abs(a.z - tile.z)) - (Math.abs(b.x - tile.x) + Math.abs(b.z - tile.z)))[0];
+    if (!pasture) return;
+    for (const tree of pasture.trees) pasture.group.remove(tree);
+    pasture.trees = [];
+    this.actorTiles.add(this.key(pasture.x, pasture.z));
     const animal = new Group();
     const wool = mat(this.random() > 0.35 ? 0xe1d6bd : 0x8e7657, 1);
     const dark = mat(0x453a2e, 1);
@@ -289,10 +462,53 @@ export class ChatCity {
       const leg = new Mesh(new CylinderGeometry(0.018, 0.02, 0.13, 5), dark);
       leg.position.set(x, 0.09, z); animal.add(leg);
     }
-    this.addActor(animal, "animal", tile.group.position.x + (this.random() - 0.5) * 0.6, tile.group.position.z + (this.random() - 0.5) * 0.6, 0.42);
+    this.addActor(animal, "animal", pasture.group.position.x + (this.random() - 0.5) * 0.16, pasture.group.position.z + (this.random() - 0.5) * 0.16, 0.12);
   }
 
-  private addWagon(tile: Tile) {
+  private findPathOrigin(x = 0, z = 0) {
+    const candidates = [...this.pathTiles].map(key => this.tileByCoord.get(key)).filter((tile): tile is Tile => Boolean(tile));
+    candidates.sort((a, b) => Math.hypot(a.group.position.x - x, a.group.position.z - z) - Math.hypot(b.group.position.x - x, b.group.position.z - z));
+    return candidates[0] ? new Vector3(candidates[0].group.position.x, 0.02, candidates[0].group.position.z) : new Vector3(0, 0.02, 0);
+  }
+
+  private buildActorRoute(x: number, z: number): Vector3[] {
+    const pathCells = [...this.pathTiles].map(key => this.tileByCoord.get(key)).filter((tile): tile is Tile => Boolean(tile && tile.group.visible));
+    if (pathCells.length < 2) return pathCells.map(tile => new Vector3(tile.group.position.x, 0.02, tile.group.position.z));
+    const start = pathCells.reduce((nearest, tile) => Math.hypot(tile.group.position.x - x, tile.group.position.z - z) < Math.hypot(nearest.group.position.x - x, nearest.group.position.z - z) ? tile : nearest);
+    const startKey = this.key(start.x, start.z);
+    const queue = [start];
+    const previous = new Map<string, string | undefined>([[startKey, undefined]]);
+    const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]] as const;
+    let farthest = start;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const current = queue[cursor];
+      farthest = current;
+      for (const [dx, dz] of directions) {
+        const next = this.tileByCoord.get(this.key(current.x + dx, current.z + dz));
+        if (!next || !next.group.visible) continue;
+        const nextKey = this.key(next.x, next.z);
+        if (!this.pathTiles.has(nextKey) || previous.has(nextKey)) continue;
+        previous.set(nextKey, this.key(current.x, current.z));
+        queue.push(next);
+      }
+    }
+    const route: Tile[] = [];
+    let key: string | undefined = this.key(farthest.x, farthest.z);
+    while (key !== undefined) {
+      const tile = this.tileByCoord.get(key);
+      if (tile) route.push(tile);
+      key = previous.get(key);
+    }
+    return route.reverse().map(tile => new Vector3(tile.group.position.x, 0.02, tile.group.position.z));
+  }
+
+  private refreshActorRoutes() {
+    for (const actor of this.actors) {
+      if (actor.kind === "wagon" || actor.kind === "car" || (actor.kind === "person" && actor.walks)) actor.route = this.buildActorRoute(actor.x, actor.z);
+    }
+  }
+
+  private addWagon() {
     if (this.actors.filter(actor => actor.kind === "wagon").length >= 3) return;
     const wagon = new Group();
     const wood = mat(0x68482d, 1);
@@ -304,10 +520,11 @@ export class ChatCity {
       const wheel = new Mesh(new CylinderGeometry(0.14, 0.14, 0.055, 10), mat(0x392d23, 1));
       wheel.rotation.x = Math.PI / 2; wheel.position.set(0.1, 0.16, z); wagon.add(wheel);
     }
-    this.addActor(wagon, "wagon", tile.group.position.x, tile.group.position.z, 1.8);
+    const origin = this.findPathOrigin();
+    this.addActor(wagon, "wagon", origin.x, origin.z, 0);
   }
 
-  private addCar(x: number, z: number) {
+  private addCar() {
     if (this.actors.filter(actor => actor.kind === "car").length >= 4) return;
     const car = new Group();
     const paint = mat(this.color(this.theme.house), 0.4, { metalness: 0.2 });
@@ -317,7 +534,8 @@ export class ChatCity {
       const wheel = new Mesh(new CylinderGeometry(0.055, 0.055, 0.045, 8), mat(0x25282a, 0.95));
       wheel.rotation.x = Math.PI / 2; wheel.position.set(wx, 0.08, wz); car.add(wheel);
     }
-    this.addActor(car, "car", x, z, 2.6);
+    const origin = this.findPathOrigin();
+    this.addActor(car, "car", origin.x, origin.z, 0);
   }
 
   private addBlimp(index: number) {
@@ -337,41 +555,74 @@ export class ChatCity {
     this.technologyEra = Math.max(this.technologyEra, Math.min(6, era));
     this.upgradePaths();
     if (this.technologyEra === 1) {
-      const huts = this.tiles.filter(tile => tile.building && tile.kind === "landmark");
-      if (huts[0]) { this.addAnimal(huts[0]); this.addAnimal(huts[0]); }
+      const firstHome = this.tiles.find(tile => tile.building && tile.kind === "house");
+      if (firstHome) { this.addAnimal(firstHome); this.addAnimal(firstHome); }
     }
     if (this.technologyEra === 2) {
       this.expandPlot();
-      const home = this.tiles.find(tile => tile.building) ?? this.tiles[0];
-      this.addWagon(home);
-      this.addWagon(home);
+      this.addWagon();
+      this.addWagon();
     } else if (this.technologyEra === 3) {
       this.expandPlot();
-      const home = this.tiles.find(tile => tile.building) ?? this.tiles[0];
-      this.addWagon(home);
+      this.addWagon();
     } else if (this.technologyEra === 4) {
       this.expandPlot();
-      this.addCar(0, 0);
-      this.addCar(1, 1);
+      this.addCar();
+      this.addCar();
+      this.renewDistrict();
     } else if (this.technologyEra === 5) {
       this.expandPlot();
       this.addBlimp(0);
       this.addBlimp(1);
     } else if (this.technologyEra === 6) {
       this.expandPlot();
-      this.addCar(-2, 1);
+      this.addCar();
       this.addBlimp(2);
+    }
+  }
+
+  private renewDistrict() {
+    if (this.renewalComplete) return;
+    const homes = this.tiles.filter(tile => tile.building && tile.kind === "house");
+    for (const center of homes) {
+      const cluster = homes
+        .filter(tile => Math.abs(tile.x - center.x) + Math.abs(tile.z - center.z) <= 2)
+        .sort((a, b) => (a === center ? -1 : b === center ? 1 : 0))
+        .slice(0, 3);
+      if (cluster.length < 3 || !this.findAccessPlan(center)) continue;
+      for (const tile of cluster) {
+        if (tile.building) {
+          tile.group.remove(tile.building);
+          this.disposeTree(tile.building);
+          tile.building = undefined;
+          tile.kind = "empty";
+          this.totalBuildings = Math.max(0, this.totalBuildings - 1);
+        }
+      }
+      if (this.makeSkyscraper(center)) {
+        this.totalBuildings++;
+        this.renewalComplete = true;
+        return;
+      }
     }
   }
 
   private updateActors(delta: number) {
     this.actorClock += delta;
+    this.campfire?.children.forEach(child => {
+      if (!(child instanceof Mesh) || child.userData.firePhase === undefined) return;
+      const phase = (child.userData.firePhase as number) + this.actorClock * 5;
+      child.scale.set(0.9 + Math.sin(phase) * 0.15, 0.82 + Math.sin(phase * 1.3) * 0.28, 0.9 + Math.cos(phase) * 0.15);
+    });
     for (const actor of this.actors) {
       const time = this.actorClock;
-      if (actor.kind === "animal") {
-        actor.group.position.x = actor.x + Math.sin(time * 0.8 + actor.phase) * actor.range;
-        actor.group.position.z = actor.z + Math.cos(time * 0.57 + actor.phase) * actor.range * 0.65;
-        actor.group.position.y = 0.02 + Math.abs(Math.sin(time * 3 + actor.phase)) * 0.025;
+      if (actor.kind === "person" && actor.walks) {
+        this.moveAlongPath(actor, delta, 0.17);
+      } else if (actor.kind === "person" || actor.kind === "animal") {
+        const speed = actor.kind === "person" ? 0.42 : 0.8;
+        actor.group.position.x = actor.x + Math.sin(time * speed + actor.phase) * actor.range;
+        actor.group.position.z = actor.z + Math.cos(time * speed * 0.72 + actor.phase) * actor.range * 0.65;
+        actor.group.position.y = 0.02 + Math.abs(Math.sin(time * (actor.kind === "person" ? 1.7 : 3) + actor.phase)) * 0.025;
         actor.group.rotation.y = Math.sin(time * 0.6 + actor.phase) * 0.45;
       } else if (actor.kind === "blimp") {
         actor.group.position.x = actor.x + Math.sin(time * 0.11 + actor.phase) * actor.range;
@@ -379,14 +630,30 @@ export class ChatCity {
         actor.group.position.y = 5.1 + Math.sin(time * 0.28 + actor.phase) * 0.28;
         actor.group.rotation.y = Math.sin(time * 0.11 + actor.phase) * 0.18;
       } else {
-        const speed = actor.kind === "car" ? 0.34 : 0.2;
-        const angle = time * speed + actor.phase;
-        actor.group.position.x = actor.x + Math.sin(angle) * actor.range;
-        actor.group.position.z = actor.z + Math.cos(angle * 0.84) * actor.range * 0.64;
-        actor.group.position.y = 0.02;
-        actor.group.rotation.y = Math.atan2(Math.cos(angle) * actor.range * speed, -Math.sin(angle * 0.84) * actor.range * 0.64 * speed);
+        this.moveAlongPath(actor, delta, actor.kind === "car" ? 0.48 : 0.22);
       }
     }
+  }
+
+  private moveAlongPath(actor: CivicActor, delta: number, speed: number) {
+    const route = actor.route ?? [];
+    if (route.length < 2) return;
+    const span = route.length - 1;
+    const cycle = span * 2;
+    actor.routeProgress = ((actor.routeProgress ?? 0) + delta * speed) % cycle;
+    const position = actor.routeProgress <= span ? actor.routeProgress : cycle - actor.routeProgress;
+    const index = Math.min(span - 1, Math.floor(position));
+    const fraction = position - index;
+    const from = route[index];
+    const to = route[index + 1];
+    actor.group.position.lerpVectors(from, to, fraction);
+    if (this.technologyEra >= 4 && actor.kind === "person") {
+      const horizontal = Math.abs(to.x - from.x) >= Math.abs(to.z - from.z);
+      if (horizontal) actor.group.position.z += 0.32;
+      else actor.group.position.x += 0.32;
+    }
+    actor.group.position.y = 0.02;
+    actor.group.rotation.y = Math.atan2(to.x - from.x, to.z - from.z);
   }
 
   private key(x: number, z: number) { return `${x},${z}`; }
@@ -432,38 +699,37 @@ export class ChatCity {
     }
   }
 
-  private makeHouse(tile: Tile, immediate = false) {
+  private makeHouse(tile: Tile, immediate = false): boolean {
     const building = new Group();
     const era = this.eraIndex;
-    if (era <= 1 && this.themeId === "ancient") {
-      this.makeAncientHut(building);
+    if (era <= 1) {
+      this.makeAncientHut(building, this.totalBuildings > 0 && this.totalBuildings % 5 === 0);
+      if (!this.connectNewBuilding(tile, building)) return false;
       tile.group.add(building);
       tile.building = building;
       tile.kind = "house";
       this.animateBuild(building, tile, immediate);
-      return;
+      return true;
     }
     const width = 0.72 + this.random() * 0.2;
     const depth = 0.72 + this.random() * 0.2;
     const style = this.random();
-    const floors = era === 0 ? (style > 0.7 ? 2 : 1)
-      : era === 1 ? (style > 0.65 ? 3 : 2)
-      : era === 2 ? (style > 0.72 ? 4 : 2)
+    const floors = era === 2 ? (style > 0.72 ? 4 : 2)
       : era === 3 ? (style > 0.68 ? 6 : 3)
       : era === 4 ? (style > 0.72 ? 7 : style > 0.4 ? 5 : 3)
       : Math.floor(4 + this.random() * 5);
-    const floorHeight = era < 2 ? 0.52 : era < 4 ? 0.6 : 0.68;
+    const floorHeight = era < 4 ? 0.6 : 0.68;
     const height = 0.28 + floors * floorHeight;
     const wall = mat(this.color(this.theme.house), era >= 4 ? 0.45 : 0.82, era >= 4 ? { metalness: 0.18 } : {});
     this.box(building, width + 0.12, 0.13, depth + 0.12, this.theme.stone, 0, 0.14, 0);
     this.box(building, width, height, depth, 0, 0, height / 2 + 0.16, 0, wall);
-    const windowRows = Math.max(1, floors - (era < 2 ? 0 : 1));
+    const windowRows = Math.max(1, floors - (era < 3 ? 0 : 1));
     this.addWindows(building, width, depth, height, windowRows, era >= 3 ? 3 : 2);
-    this.box(building, 0.19, 0.38, 0.045, era < 2 ? 0x765037 : 0x624737, 0, 0.35, depth / 2 + 0.026);
+    this.box(building, 0.19, 0.38, 0.045, 0x624737, 0, 0.35, depth / 2 + 0.026);
 
-    if (era < 4 && (style < 0.66 || era < 2)) {
-      const roofColor = era === 0 && this.themeId === "ancient" ? 0x97764e : this.color(this.theme.roof);
-      const roofHeight = era < 2 ? 0.36 : 0.52;
+    if (era < 4 && style < 0.66) {
+      const roofColor = this.color(this.theme.roof);
+      const roofHeight = 0.52;
       const roof = new Mesh(new ConeGeometry(Math.max(width, depth) * 0.79, roofHeight, 4), mat(roofColor));
       roof.rotation.y = Math.PI / 4;
       roof.position.y = height + 0.16 + roofHeight / 2;
@@ -490,13 +756,15 @@ export class ChatCity {
       }
     }
     this.addThemeDetails(building, width, height, depth);
+    if (!this.connectNewBuilding(tile, building)) return false;
     tile.group.add(building);
     tile.building = building;
     tile.kind = "house";
     this.animateBuild(building, tile, immediate);
+    return true;
   }
 
-  private makeAncientHut(building: Group) {
+  private makeAncientHut(building: Group, includeHearth = false) {
     const plaster = mat(this.color([0xb59a69, 0xa78658, 0xc0a775, 0x92744f]), 1);
     const thatchColors = [0x9d7945, 0xb28c50, 0xc09a59, 0x886b40];
     const wood = mat(0x513925, 1);
@@ -533,49 +801,40 @@ export class ChatCity {
     const door = this.box(building, 0.21, 0.42, 0.055, 0, 0, 0.35, 0.47, wood);
     door.rotation.y = 0.08;
 
-    // A shared cooking fire sits just outside each home, ringed with stones and kindling.
-    const hearth = new Group();
-    hearth.position.set(0.49, 0.1, 0.53);
-    for (let i = 0; i < 7; i++) {
-      const angle = i * Math.PI * 2 / 7;
-      const stone = new Mesh(new IcosahedronGeometry(0.075, 0), mat(i % 2 ? 0x786f58 : 0x938366));
-      stone.scale.set(1.2, 0.7, 0.9);
-      stone.position.set(Math.cos(angle) * 0.22, 0, Math.sin(angle) * 0.22);
-      hearth.add(stone);
+    if (includeHearth) {
+      const hearth = new Group();
+      hearth.position.set(0.49, 0.1, 0.53);
+      for (let i = 0; i < 7; i++) {
+        const angle = i * Math.PI * 2 / 7;
+        const stone = new Mesh(new IcosahedronGeometry(0.075, 0), mat(i % 2 ? 0x786f58 : 0x938366));
+        stone.scale.set(1.2, 0.7, 0.9);
+        stone.position.set(Math.cos(angle) * 0.22, 0, Math.sin(angle) * 0.22);
+        hearth.add(stone);
+      }
+      const logA = new Mesh(new CylinderGeometry(0.035, 0.045, 0.34, 6), wood);
+      logA.rotation.z = Math.PI / 2; logA.rotation.y = 0.4; hearth.add(logA);
+      const logB = logA.clone(); logB.rotation.y = -0.5; hearth.add(logB);
+      for (let i = 0; i < 3; i++) {
+        const flame = new Mesh(new ConeGeometry(0.075 - i * 0.012, 0.25 + i * 0.08, 6), mat(i === 1 ? 0xffa43d : 0xffd26b, 0.45, { emissive: i === 1 ? 0xff4e14 : 0xf28a23, emissiveIntensity: 1.8 }));
+        flame.position.set((i - 1) * 0.055, 0.17 + i * 0.035, (i % 2) * 0.045);
+        flame.userData.hearthPhase = i * 1.7;
+        hearth.add(flame);
+      }
+      building.add(hearth);
+      building.userData.hearth = hearth;
     }
-    const logA = new Mesh(new CylinderGeometry(0.035, 0.045, 0.34, 6), wood);
-    logA.rotation.z = Math.PI / 2; logA.rotation.y = 0.4; hearth.add(logA);
-    const logB = logA.clone(); logB.rotation.y = -0.5; hearth.add(logB);
-    for (let i = 0; i < 3; i++) {
-      const flame = new Mesh(new ConeGeometry(0.075 - i * 0.012, 0.25 + i * 0.08, 6), mat(i === 1 ? 0xffa43d : 0xffd26b, 0.45, { emissive: i === 1 ? 0xff4e14 : 0xf28a23, emissiveIntensity: 1.8 }));
-      flame.position.set((i - 1) * 0.055, 0.17 + i * 0.035, (i % 2) * 0.045);
-      flame.userData.hearthPhase = i * 1.7;
-      hearth.add(flame);
-    }
-    building.add(hearth);
-    building.userData.hearth = hearth;
   }
 
-  private makeLandmark(tile: Tile, immediate = false) {
+  private makeLandmark(tile: Tile, immediate = false): boolean {
     const building = new Group();
     const era = this.eraIndex;
     const stone = mat(this.theme.stone, 0.65);
-    if (era <= 1 && this.themeId === "ancient") {
+    if (era <= 1) {
       // The village keeps its shared timber-and-thatch lodge until stonework is unlocked.
       const lodge = new Group();
       this.makeAncientHut(lodge);
       lodge.scale.setScalar(1.4);
       building.add(lodge);
-    } else if (era === 1) {
-      this.box(building, 1.05, 0.3, 0.98, 0x8d7658, 0, 0.23, 0);
-      this.box(building, 0.88, 0.8, 0.82, 0, 0, 0.78, 0, stone);
-      this.addWindows(building, 0.88, 0.82, 0.8, 2, 3);
-      for (const x of [-0.32, 0.32]) {
-        const column = new Mesh(new CylinderGeometry(0.055, 0.065, 1.0, 10), mat(0xd6c49c));
-        column.position.set(x, 0.75, 0.43); building.add(column);
-      }
-      const dome = new Mesh(new SphereGeometry(0.4, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat(this.theme.accent, 0.44, { metalness: 0.2 }));
-      dome.position.y = 1.2; dome.castShadow = true; building.add(dome);
     } else if (era === 2) {
       this.box(building, 0.96, 0.4, 0.96, 0, 0, 0.28, 0, stone);
       this.box(building, 0.62, 2.5, 0.62, 0, 0, 1.73, 0, mat(0x77736b));
@@ -625,11 +884,39 @@ export class ChatCity {
         beacon.position.y = towerH + 1.08; building.add(beacon);
       }
     }
-    this.addThemeDetails(building, 0.75, 2.5, 0.75);
+    if (era > 1) {
+      this.box(building, 0.2, 0.4, 0.055, 0, 0, 0.23, 0.48, mat(0x513925, 1));
+    }
+    if (era > 1) this.addThemeDetails(building, 0.75, 2.5, 0.75);
+    if (!this.connectNewBuilding(tile, building)) return false;
     tile.group.add(building);
     tile.building = building;
     tile.kind = "landmark";
     this.animateBuild(building, tile, immediate);
+    return true;
+  }
+
+  private makeSkyscraper(tile: Tile, immediate = false): boolean {
+    const building = new Group();
+    const glass = mat(this.theme.house[1], 0.32, { metalness: 0.22 });
+    this.box(building, 0.98, 0.28, 0.98, 0x77766a, 0, 0.18, 0);
+    this.box(building, 0.58, 5.2, 0.58, 0, 0, 2.92, 0, glass);
+    this.addWindows(building, 0.58, 0.58, 5.2, 15, 2);
+    for (const x of [-0.34, 0.34]) {
+      this.box(building, 0.045, 5.25, 0.045, 0x505d61, x, 2.9, 0, mat(0x505d61, 0.5, { metalness: 0.36 }));
+    }
+    this.box(building, 0.72, 0.16, 0.72, 0x626d70, 0, 5.6, 0);
+    const antenna = new Mesh(new CylinderGeometry(0.025, 0.05, 0.75, 6), mat(this.theme.accent, 0.4, { metalness: 0.3 }));
+    antenna.position.y = 6.04; building.add(antenna);
+    const entrance = this.box(building, 0.22, 0.42, 0.06, 0, 0, 0.23, 0.5, mat(0x29343a, 0.35, { metalness: 0.2 }));
+    entrance.material.emissive.setHex(this.theme.glow);
+    entrance.material.emissiveIntensity = 0.16;
+    if (!this.connectNewBuilding(tile, building)) return false;
+    tile.group.add(building);
+    tile.building = building;
+    tile.kind = "landmark";
+    this.animateBuild(building, tile, immediate);
+    return true;
   }
 
   private addThemeDetails(building: Group, width: number, height: number, depth: number) {
@@ -660,22 +947,30 @@ export class ChatCity {
 
   build(kind: "house" | "landmark", count: number, immediate = false) {
     for (let n = 0; n < Math.min(30, Math.max(0, count)); n++) {
-      let available = this.tiles.filter(tile => tile.group.visible && !tile.road && tile.kind === "empty");
+      const hearthTile = this.tiles.find(tile => tile.kind === "landmark" && !tile.building);
+      const canUseLot = (tile: Tile) => tile.group.visible && tile.kind === "empty"
+        && !this.pathTiles.has(this.key(tile.x, tile.z))
+        && !this.actorTiles.has(this.key(tile.x, tile.z))
+        && (!hearthTile || Math.abs(tile.x - hearthTile.x) + Math.abs(tile.z - hearthTile.z) > 1)
+        && this.accessNeighbors(tile).some(neighbor => neighbor.tile?.group.visible && !neighbor.tile.building && (neighbor.tile.kind === "empty" || this.pathTiles.has(this.key(neighbor.tile.x, neighbor.tile.z))));
+      let available = this.tiles.filter(canUseLot);
       if (!available.length && this.activeRadius < 15.5) {
         this.expandPlot();
-        available = this.tiles.filter(tile => tile.group.visible && !tile.road && tile.kind === "empty");
+        available = this.tiles.filter(canUseLot);
       }
       if (!available.length) return;
-      const occupied = this.tiles.filter(tile => tile.kind === "house" || tile.kind === "landmark");
+      const occupied = this.tiles.filter(tile => (tile.building && tile.kind !== "fire") || tile === hearthTile);
       const near = available.filter(tile => !occupied.length || occupied.some(other => Math.abs(tile.x - other.x) + Math.abs(tile.z - other.z) <= 3));
-      const pool = near.length ? near : available;
+      const pool = (near.length ? near : available).filter(tile => this.findAccessPlan(tile));
+      if (!pool.length) return;
       const tile = pool[Math.floor(this.random() * pool.length)];
       for (const tree of tile.trees) tile.group.remove(tree);
       tile.trees = [];
-      this.connectNewBuilding(tile);
-      if (kind === "house") this.makeHouse(tile, immediate); else this.makeLandmark(tile, immediate);
+      const built = kind === "house" ? this.makeHouse(tile, immediate) : this.makeLandmark(tile, immediate);
+      if (!built) continue;
       this.totalBuildings++;
-      if (this.themeId === "ancient" && this.technologyEra <= 1 && this.totalBuildings % 2 === 0) this.addAnimal(tile);
+      if (this.technologyEra <= 1 && this.totalBuildings % 2 === 0) this.addAnimal(tile);
+      if (this.totalBuildings % 3 === 0) this.addPerson(tile, this.totalBuildings, true);
     }
   }
 
@@ -686,7 +981,7 @@ export class ChatCity {
   }
 
   disaster(intensity: number, historical = false) {
-    const occupied = this.tiles.filter(tile => tile.kind === "house" || tile.kind === "landmark");
+    const occupied = this.tiles.filter(tile => tile.building && (tile.kind === "house" || tile.kind === "landmark"));
     const count = Math.min(occupied.length, Math.max(1, Math.ceil(intensity * 1.5)));
     for (const tile of occupied.sort(() => this.random() - 0.5).slice(0, count)) {
       if (historical) this.destroyBuilding(tile);
