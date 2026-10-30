@@ -316,6 +316,14 @@ export class ChatCity {
   private makeHouse(tile: Tile, immediate = false) {
     const building = new Group();
     const era = this.eraIndex;
+    if (era === 0 && this.themeId === "ancient") {
+      this.makeAncientHut(building);
+      tile.group.add(building);
+      tile.building = building;
+      tile.kind = "house";
+      this.animateBuild(building, tile, immediate);
+      return;
+    }
     const width = 0.72 + this.random() * 0.2;
     const depth = 0.72 + this.random() * 0.2;
     const style = this.random();
@@ -369,23 +377,76 @@ export class ChatCity {
     this.animateBuild(building, tile, immediate);
   }
 
+  private makeAncientHut(building: Group) {
+    const plaster = mat(this.color([0xb59a69, 0xa78658, 0xc0a775, 0x92744f]), 1);
+    const thatchColors = [0x9d7945, 0xb28c50, 0xc09a59, 0x886b40];
+    const wood = mat(0x513925, 1);
+    this.box(building, 1.02, 0.11, 0.98, 0x756044, 0, 0.11, 0);
+    const walls = new Mesh(new CylinderGeometry(0.42, 0.49, 0.68, 9, 1), plaster);
+    walls.position.y = 0.48;
+    walls.castShadow = true;
+    walls.receiveShadow = true;
+    building.add(walls);
+
+    // Exposed timber uprights and a rough ring beam make the hut read as hand-built.
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4;
+      this.box(building, 0.075, 0.82, 0.075, 0, Math.cos(angle) * 0.45, 0.53, Math.sin(angle) * 0.45, wood);
+    }
+    const ringBeam = new Mesh(new CylinderGeometry(0.5, 0.5, 0.075, 9), wood);
+    ringBeam.position.y = 0.88;
+    building.add(ringBeam);
+
+    const roofColor = this.color(thatchColors);
+    const roof = new Mesh(new ConeGeometry(0.72, 0.78, 9), mat(roofColor, 1));
+    roof.position.y = 1.18;
+    roof.castShadow = true;
+    building.add(roof);
+    // Short straw-colored ribs break up the smooth cone and catch the light.
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const rib = new Mesh(new CylinderGeometry(0.018, 0.026, 0.73, 4), mat(this.color(thatchColors), 1));
+      rib.position.set(Math.cos(angle) * 0.36, 1.22, Math.sin(angle) * 0.36);
+      rib.rotation.z = -Math.cos(angle) * 0.42;
+      rib.rotation.x = Math.sin(angle) * 0.42;
+      building.add(rib);
+    }
+    const door = this.box(building, 0.21, 0.42, 0.055, 0, 0, 0.35, 0.47, wood);
+    door.rotation.y = 0.08;
+
+    // A shared cooking fire sits just outside each home, ringed with stones and kindling.
+    const hearth = new Group();
+    hearth.position.set(0.49, 0.1, 0.53);
+    for (let i = 0; i < 7; i++) {
+      const angle = i * Math.PI * 2 / 7;
+      const stone = new Mesh(new IcosahedronGeometry(0.075, 0), mat(i % 2 ? 0x786f58 : 0x938366));
+      stone.scale.set(1.2, 0.7, 0.9);
+      stone.position.set(Math.cos(angle) * 0.22, 0, Math.sin(angle) * 0.22);
+      hearth.add(stone);
+    }
+    const logA = new Mesh(new CylinderGeometry(0.035, 0.045, 0.34, 6), wood);
+    logA.rotation.z = Math.PI / 2; logA.rotation.y = 0.4; hearth.add(logA);
+    const logB = logA.clone(); logB.rotation.y = -0.5; hearth.add(logB);
+    for (let i = 0; i < 3; i++) {
+      const flame = new Mesh(new ConeGeometry(0.075 - i * 0.012, 0.25 + i * 0.08, 6), mat(i === 1 ? 0xffa43d : 0xffd26b, 0.45, { emissive: i === 1 ? 0xff4e14 : 0xf28a23, emissiveIntensity: 1.8 }));
+      flame.position.set((i - 1) * 0.055, 0.17 + i * 0.035, (i % 2) * 0.045);
+      flame.userData.hearthPhase = i * 1.7;
+      hearth.add(flame);
+    }
+    building.add(hearth);
+    building.userData.hearth = hearth;
+  }
+
   private makeLandmark(tile: Tile, immediate = false) {
     const building = new Group();
     const era = this.eraIndex;
     const stone = mat(this.theme.stone, 0.65);
     if (era === 0) {
-      // The founding hall begins as a shared hearth and stone temple at the heart of the plot.
-      this.box(building, 1.04, 0.2, 0.96, 0x80684c, 0, 0.18, 0);
-      this.box(building, 0.86, 0.58, 0.72, 0, 0, 0.56, -0.02, stone);
-      for (const x of [-0.32, -0.1, 0.12, 0.34]) {
-        const column = new Mesh(new CylinderGeometry(0.045, 0.06, 0.68, 8), mat(0xd0bb91, 0.68));
-        column.position.set(x, 0.66, 0.38); column.castShadow = true; building.add(column);
-      }
-      this.box(building, 1.12, 0.14, 0.92, 0xc9a66e, 0, 1.03, 0);
-      const pediment = new Mesh(new ConeGeometry(0.62, 0.42, 4), mat(0x98714d));
-      pediment.rotation.y = Math.PI / 4; pediment.position.set(0, 1.29, 0.03); pediment.castShadow = true; building.add(pediment);
-      const hearth = new Mesh(new SphereGeometry(0.09, 10, 8), mat(this.theme.accent, 0.24, { emissive: this.theme.glow, emissiveIntensity: 1.6 }));
-      hearth.position.set(0, 0.58, 0.43); building.add(hearth);
+      // The first shared hall is an oversized timber-and-thatch gathering lodge.
+      const lodge = new Group();
+      this.makeAncientHut(lodge);
+      lodge.scale.setScalar(1.4);
+      building.add(lodge);
     } else if (era === 1) {
       this.box(building, 1.05, 0.3, 0.98, 0x8d7658, 0, 0.23, 0);
       this.box(building, 0.88, 0.8, 0.82, 0, 0, 0.78, 0, stone);
@@ -569,6 +630,13 @@ export class ChatCity {
       const bounce = progress < 1 ? 0.065 * Math.sin(progress * Math.PI) * (1 - progress) : 0;
       building.scale.y = 0.02 + eased * 0.98 + bounce;
       building.position.y = (1 - building.scale.y) * 0.5;
+
+      const hearth = building.userData.hearth as Group | undefined;
+      hearth?.children.forEach(child => {
+        if (!(child instanceof Mesh) || child.userData.hearthPhase === undefined) return;
+        const phase = (child.userData.hearthPhase as number) + performance.now() * 0.006;
+        child.scale.set(0.88 + Math.sin(phase) * 0.18, 0.86 + Math.sin(phase * 1.4) * 0.28, 0.88 + Math.cos(phase) * 0.18);
+      });
 
       if (tile.kind === "fire") {
         const flames = building.userData.flames as Group | undefined;
