@@ -6,6 +6,8 @@ export class EventMapper {
   private readonly sessionStartedAt = Date.now();
   private houseProgress = 0;
   private landmarkProgress = 0;
+  private technologyProgress = 0;
+  private technologyEra = 0;
   private lastBuildAt = 0;
 
   map(aggregate: Aggregate, delta: Counts, deltaRaidViewers: number, signals: GrowthSignals): SimEvent[] {
@@ -22,8 +24,22 @@ export class EventMapper {
       const pointsPerMessage = (growth.basePoints + averageComplexity * growth.complexityMultiplier + positiveRatio * growth.positivityMultiplier) * longevity * chatPace;
       this.houseProgress += delta.COMMENT * pointsPerMessage;
       this.landmarkProgress += delta.QUESTION * pointsPerMessage;
+      const technology = config.technology;
+      this.technologyProgress += (
+        eligible * technology.chatPoint
+        + signals.complexityTotal * technology.complexityPoint
+        + signals.positiveMessages * technology.positivityPoint
+      ) * longevity * chatPace;
     }
     this.houseProgress += signals.supportPoints * config.support.growthMultiplier;
+    this.technologyProgress += signals.supportPoints * config.technology.supportPointMultiplier;
+
+    while (this.technologyEra < config.technology.milestones.length
+      && this.technologyProgress >= config.technology.milestones[this.technologyEra].points) {
+      const milestone = config.technology.milestones[this.technologyEra];
+      this.technologyEra++;
+      events.push({ type: "advancement", era: this.technologyEra, name: milestone.name });
+    }
 
     const now = Date.now();
     if (now - this.lastBuildAt >= growth.buildCooldownMs) {

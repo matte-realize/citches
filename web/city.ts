@@ -5,9 +5,10 @@ import type { SimEvent } from "../src/types.js";
 type TileKind = "empty" | "house" | "landmark" | "fire";
 type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number };
 type Particle = { mesh: Mesh; velocity: Vector3; life: number; maxLife: number; gravity: number };
+type PathSegment = { mesh: Mesh; length: number; horizontal: boolean };
+type CivicActor = { group: Group; kind: "animal" | "wagon" | "car" | "blimp"; x: number; z: number; phase: number; range: number };
 
 const GRID = 32;
-const ROAD_EVERY = 6;
 export const CITY_THEMES = {
   ancient: { label: "Ancient Empire", sky: 0x111f2a, grass: [0x355849, 0x3b604d, 0x41634f, 0x345348], road: [0x344047, 0x38434a, 0x303c42], house: [0xc99664, 0xb87d54, 0xd4bd8f, 0x9b765b], roof: [0x806041, 0x8b5a48, 0x67554a], window: [0xffd27c, 0xffe8b1, 0xf4c36f], stone: 0xb79a72, foliage: [0x538462, 0x67966c, 0x3e735e], accent: 0xd7b36c, glow: 0xf3b96e },
   fantasy: { label: "Mythic Realm", sky: 0x181c36, grass: [0x344e48, 0x405754, 0x454b66], road: [0x34394d, 0x3e4056, 0x303646], house: [0x8e83aa, 0xb07d86, 0x7f9d99, 0xc2a77a], roof: [0x554b74, 0x7d526e, 0x46616e], window: [0x8ff0e0, 0xd8afff, 0xffd982], stone: 0x9e9fb8, foliage: [0x5b977d, 0x609c8c, 0x4a806e], accent: 0xa8efd7, glow: 0x75e4dc },
@@ -31,10 +32,12 @@ export class ChatCity {
   private tiles: Tile[] = [];
   private tileByCoord = new Map<string, Tile>();
   private particles: Particle[] = [];
+  private paths: PathSegment[] = [];
+  private actors: CivicActor[] = [];
+  private actorClock = 0;
   private activeRadius = 4.5;
   private totalBuildings = 0;
-  private nextExpansionAt = 7;
-  private expansionCount = 0;
+  private technologyEra = 0;
   private plotBorder?: LineLoop;
   private theme: typeof CITY_THEMES[CityThemeId];
   private themeId: CityThemeId;
@@ -101,17 +104,17 @@ export class ChatCity {
   private makeTiles() {
     for (let z = 0; z < GRID; z++) {
       for (let x = 0; x < GRID; x++) {
-        const road = x % ROAD_EVERY === 0 || z % ROAD_EVERY === 0;
+        const road = false;
         const group = new Group();
         group.position.set(x - GRID / 2 + 0.5, 0, z - GRID / 2 + 0.5);
         group.visible = false;
-        const colorSet = road ? this.theme.road : this.theme.grass;
-        const tileColor = colorSet[(x * 7 + z * 13) % colorSet.length];
+        const colorSet = this.theme.grass;
+        const terrainHash = Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453);
+        const tileColor = colorSet[Math.floor((terrainHash % 1) * colorSet.length)];
         const slab = new Mesh(new BoxGeometry(0.99, road ? 0.075 : 0.12, 0.99), mat(tileColor));
         slab.position.y = road ? -0.04 : -0.06;
         slab.receiveShadow = true;
         group.add(slab);
-        if (road) this.addRoadDetails(group, x, z);
         this.root.add(group);
         const tile: Tile = { x, z, kind: "empty", road, group, trees: [] };
         this.tiles.push(tile);
@@ -124,47 +127,8 @@ export class ChatCity {
       if (!tile.road && ((tile.x * 11 + tile.z * 17) % 53 === 0)) {
         this.addTree(tile, -0.23, -0.18, 0.72);
         this.addTree(tile, 0.2, 0.16, 0.55);
-      } else if (tile.road && (tile.x % ROAD_EVERY === 0) !== (tile.z % ROAD_EVERY === 0) && (tile.x + tile.z) % 11 === 0) {
-        this.addStreetLamp(tile);
       }
     }
-  }
-
-  private addRoadDetails(group: Group, x: number, z: number) {
-    const intersection = x % ROAD_EVERY === 0 && z % ROAD_EVERY === 0;
-    if (intersection) {
-      const crosswalkMat = mat(0xa9b3ad, 0.95);
-      for (let n = -2; n <= 2; n++) {
-        const stripe = new Mesh(new BoxGeometry(0.07, 0.012, 0.34), crosswalkMat);
-        stripe.position.set(n * 0.13, 0.006, 0.28);
-        group.add(stripe);
-        const stripe2 = new Mesh(new BoxGeometry(0.34, 0.012, 0.07), crosswalkMat);
-        stripe2.position.set(0.28, 0.006, n * 0.13);
-        group.add(stripe2);
-      }
-      return;
-    }
-    if (z % ROAD_EVERY === 0 && x % 2 === 1) {
-      const dash = new Mesh(new BoxGeometry(0.34, 0.012, 0.025), mat(this.theme.accent, 0.9));
-      dash.position.y = 0.006;
-      group.add(dash);
-    }
-    if (x % ROAD_EVERY === 0 && z % 2 === 1) {
-      const dash = new Mesh(new BoxGeometry(0.025, 0.012, 0.34), mat(this.theme.accent, 0.9));
-      dash.position.y = 0.006;
-      group.add(dash);
-    }
-  }
-
-  private addStreetLamp(tile: Tile) {
-    const lamp = new Group();
-    const post = new Mesh(new CylinderGeometry(0.018, 0.025, 0.52, 6), mat(0x596a6b, 0.5, { metalness: 0.35 }));
-    post.position.set(0.34, 0.24, -0.3);
-    lamp.add(post);
-    const bulb = new Mesh(new SphereGeometry(0.055, 8, 6), mat(this.theme.accent, 0.3, { emissive: this.theme.glow, emissiveIntensity: 1.4 }));
-    bulb.position.set(0.34, 0.52, -0.3);
-    lamp.add(bulb);
-    tile.group.add(lamp);
   }
 
   private addTree(tile: Tile, x: number, z: number, scale: number) {
@@ -209,18 +173,10 @@ export class ChatCity {
     this.camera.updateProjectionMatrix();
   }
 
-  private get eraIndex(): number {
-    if (this.totalBuildings < 7) return 0;
-    if (this.totalBuildings < 24) return 1;
-    if (this.totalBuildings < 50) return 2;
-    if (this.totalBuildings < 100) return 3;
-    if (this.totalBuildings < 180) return 4;
-    if (this.totalBuildings < 300) return 5;
-    return 6;
-  }
+  private get eraIndex(): number { return this.technologyEra; }
 
   get stage(): string {
-    return ["ANCIENT CIVILIZATION", "CLASSICAL CITY", "MEDIEVAL KINGDOM", "INDUSTRIAL AGE", "MODERN CITY", "METROPOLIS", "EMPIRE"][this.eraIndex];
+    return ["FOUNDING VILLAGE", "VILLAGE & FARMING", "BRONZE & MASONRY", "CLASSICAL KINGDOM", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE"][this.eraIndex];
   }
 
   get themeName(): string { return this.theme.label.toUpperCase(); }
@@ -265,9 +221,172 @@ export class ChatCity {
 
   private expandPlot() {
     if (this.activeRadius >= 15.5) return;
-    this.expansionCount++;
     this.setActiveRadius(Math.min(15.5, this.activeRadius + 2));
-    this.nextExpansionAt += 12 + this.expansionCount * 5;
+  }
+
+  private addPathSegment(from: Vector3, to: Vector3) {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    if (Math.abs(dx) + Math.abs(dz) < 0.5) return;
+    const horizontal = Math.abs(dx) >= Math.abs(dz);
+    const length = Math.max(0.22, Math.abs(horizontal ? dx : dz));
+    const mesh = new Mesh(new BoxGeometry(1, 0.018, 1), mat(this.theme.road[0], 1));
+    mesh.position.set((from.x + to.x) / 2, 0.014, (from.z + to.z) / 2);
+    this.root.add(mesh);
+    this.paths.push({ mesh, length, horizontal });
+    this.stylePath(mesh, length, horizontal);
+  }
+
+  private stylePath(mesh: Mesh, length: number, horizontal: boolean) {
+    const era = this.technologyEra;
+    const width = era < 2 ? 0.1 + era * 0.025 : era === 2 ? 0.16 : era === 3 ? 0.21 : 0.27;
+    mesh.geometry.dispose();
+    mesh.geometry = new BoxGeometry(horizontal ? length : width, 0.018, horizontal ? width : length);
+    const surface = era < 2 ? (era === 0 ? 0x79623e : 0x8c7955)
+      : era === 2 ? 0x807c6c
+      : era === 3 ? this.theme.road[0]
+      : this.theme.road[1];
+    const material = mesh.material as MeshStandardMaterial;
+    material.color.setHex(surface);
+    material.roughness = era < 3 ? 1 : 0.82;
+  }
+
+  private connectNewBuilding(tile: Tile) {
+    const existing = this.tiles.filter(other => other !== tile && other.building && other.kind !== "fire");
+    if (!existing.length) return;
+    const target = new Vector3(tile.group.position.x, 0.014, tile.group.position.z);
+    const sourceTile = existing.reduce((nearest, other) => {
+      const distance = Math.abs(tile.x - other.x) + Math.abs(tile.z - other.z);
+      const nearestDistance = Math.abs(tile.x - nearest.x) + Math.abs(tile.z - nearest.z);
+      return distance < nearestDistance ? other : nearest;
+    });
+    const source = new Vector3(sourceTile.group.position.x, 0.014, sourceTile.group.position.z);
+    const corner = new Vector3(target.x, 0.014, source.z);
+    this.addPathSegment(source, corner);
+    this.addPathSegment(corner, target);
+  }
+
+  private upgradePaths() {
+    for (const path of this.paths) this.stylePath(path.mesh, path.length, path.horizontal);
+  }
+
+  private addActor(group: Group, kind: CivicActor["kind"], x: number, z: number, range = 1.2) {
+    group.position.set(x, kind === "blimp" ? 5.1 : 0.02, z);
+    this.root.add(group);
+    this.actors.push({ group, kind, x, z, phase: this.random() * Math.PI * 2, range });
+  }
+
+  private addAnimal(tile: Tile) {
+    if (this.actors.filter(actor => actor.kind === "animal").length >= 8) return;
+    const animal = new Group();
+    const wool = mat(this.random() > 0.35 ? 0xe1d6bd : 0x8e7657, 1);
+    const dark = mat(0x453a2e, 1);
+    const body = new Mesh(new SphereGeometry(0.17, 8, 6), wool);
+    body.scale.set(1.25, 0.9, 0.82); body.position.y = 0.21; animal.add(body);
+    const head = new Mesh(new SphereGeometry(0.085, 7, 5), dark);
+    head.position.set(0.19, 0.28, 0); animal.add(head);
+    for (const x of [-0.12, 0.12]) for (const z of [-0.095, 0.095]) {
+      const leg = new Mesh(new CylinderGeometry(0.018, 0.02, 0.13, 5), dark);
+      leg.position.set(x, 0.09, z); animal.add(leg);
+    }
+    this.addActor(animal, "animal", tile.group.position.x + (this.random() - 0.5) * 0.6, tile.group.position.z + (this.random() - 0.5) * 0.6, 0.42);
+  }
+
+  private addWagon(tile: Tile) {
+    if (this.actors.filter(actor => actor.kind === "wagon").length >= 3) return;
+    const wagon = new Group();
+    const wood = mat(0x68482d, 1);
+    const horse = new Mesh(new SphereGeometry(0.12, 8, 6), mat(0x78543a, 1));
+    horse.scale.set(1.4, 0.9, 0.7); horse.position.set(-0.28, 0.2, 0); wagon.add(horse);
+    const head = new Mesh(new SphereGeometry(0.065, 6, 5), wood); head.position.set(-0.43, 0.3, 0); wagon.add(head);
+    this.box(wagon, 0.42, 0.12, 0.3, 0, 0.12, 0.28, 0, wood);
+    for (const z of [-0.19, 0.19]) {
+      const wheel = new Mesh(new CylinderGeometry(0.14, 0.14, 0.055, 10), mat(0x392d23, 1));
+      wheel.rotation.x = Math.PI / 2; wheel.position.set(0.1, 0.16, z); wagon.add(wheel);
+    }
+    this.addActor(wagon, "wagon", tile.group.position.x, tile.group.position.z, 1.8);
+  }
+
+  private addCar(x: number, z: number) {
+    if (this.actors.filter(actor => actor.kind === "car").length >= 4) return;
+    const car = new Group();
+    const paint = mat(this.color(this.theme.house), 0.4, { metalness: 0.2 });
+    this.box(car, 0.56, 0.18, 0.3, 0, 0, 0.18, 0, paint);
+    this.box(car, 0.29, 0.17, 0.25, 0, -0.015, 0.34, 0, mat(this.theme.window[0], 0.25, { metalness: 0.12 }));
+    for (const wx of [-0.19, 0.19]) for (const wz of [-0.16, 0.16]) {
+      const wheel = new Mesh(new CylinderGeometry(0.055, 0.055, 0.045, 8), mat(0x25282a, 0.95));
+      wheel.rotation.x = Math.PI / 2; wheel.position.set(wx, 0.08, wz); car.add(wheel);
+    }
+    this.addActor(car, "car", x, z, 2.6);
+  }
+
+  private addBlimp(index: number) {
+    const blimp = new Group();
+    const envelope = new Mesh(new SphereGeometry(0.48, 12, 8), mat(this.theme.accent, 0.58));
+    envelope.scale.set(1.8, 0.7, 0.72); blimp.add(envelope);
+    const gondola = new Mesh(new BoxGeometry(0.42, 0.11, 0.15), mat(0x604a36, 0.85));
+    gondola.position.y = -0.36; blimp.add(gondola);
+    for (const x of [-0.13, 0.13]) {
+      const cable = new Mesh(new CylinderGeometry(0.012, 0.012, 0.22, 4), mat(0x514538));
+      cable.position.set(x, -0.24, 0); blimp.add(cable);
+    }
+    this.addActor(blimp, "blimp", (index - 0.5) * 2, -2, 5.5 + index);
+  }
+
+  private unlockTechnology(era: number) {
+    this.technologyEra = Math.max(this.technologyEra, Math.min(6, era));
+    this.upgradePaths();
+    if (this.technologyEra === 1) {
+      const huts = this.tiles.filter(tile => tile.building && tile.kind === "landmark");
+      if (huts[0]) { this.addAnimal(huts[0]); this.addAnimal(huts[0]); }
+    }
+    if (this.technologyEra === 2) {
+      this.expandPlot();
+      const home = this.tiles.find(tile => tile.building) ?? this.tiles[0];
+      this.addWagon(home);
+      this.addWagon(home);
+    } else if (this.technologyEra === 3) {
+      this.expandPlot();
+      const home = this.tiles.find(tile => tile.building) ?? this.tiles[0];
+      this.addWagon(home);
+    } else if (this.technologyEra === 4) {
+      this.expandPlot();
+      this.addCar(0, 0);
+      this.addCar(1, 1);
+    } else if (this.technologyEra === 5) {
+      this.expandPlot();
+      this.addBlimp(0);
+      this.addBlimp(1);
+    } else if (this.technologyEra === 6) {
+      this.expandPlot();
+      this.addCar(-2, 1);
+      this.addBlimp(2);
+    }
+  }
+
+  private updateActors(delta: number) {
+    this.actorClock += delta;
+    for (const actor of this.actors) {
+      const time = this.actorClock;
+      if (actor.kind === "animal") {
+        actor.group.position.x = actor.x + Math.sin(time * 0.8 + actor.phase) * actor.range;
+        actor.group.position.z = actor.z + Math.cos(time * 0.57 + actor.phase) * actor.range * 0.65;
+        actor.group.position.y = 0.02 + Math.abs(Math.sin(time * 3 + actor.phase)) * 0.025;
+        actor.group.rotation.y = Math.sin(time * 0.6 + actor.phase) * 0.45;
+      } else if (actor.kind === "blimp") {
+        actor.group.position.x = actor.x + Math.sin(time * 0.11 + actor.phase) * actor.range;
+        actor.group.position.z = actor.z + Math.cos(time * 0.08 + actor.phase) * actor.range * 0.55;
+        actor.group.position.y = 5.1 + Math.sin(time * 0.28 + actor.phase) * 0.28;
+        actor.group.rotation.y = Math.sin(time * 0.11 + actor.phase) * 0.18;
+      } else {
+        const speed = actor.kind === "car" ? 0.34 : 0.2;
+        const angle = time * speed + actor.phase;
+        actor.group.position.x = actor.x + Math.sin(angle) * actor.range;
+        actor.group.position.z = actor.z + Math.cos(angle * 0.84) * actor.range * 0.64;
+        actor.group.position.y = 0.02;
+        actor.group.rotation.y = Math.atan2(Math.cos(angle) * actor.range * speed, -Math.sin(angle * 0.84) * actor.range * 0.64 * speed);
+      }
+    }
   }
 
   private key(x: number, z: number) { return `${x},${z}`; }
@@ -316,7 +435,7 @@ export class ChatCity {
   private makeHouse(tile: Tile, immediate = false) {
     const building = new Group();
     const era = this.eraIndex;
-    if (era === 0 && this.themeId === "ancient") {
+    if (era <= 1 && this.themeId === "ancient") {
       this.makeAncientHut(building);
       tile.group.add(building);
       tile.building = building;
@@ -441,8 +560,8 @@ export class ChatCity {
     const building = new Group();
     const era = this.eraIndex;
     const stone = mat(this.theme.stone, 0.65);
-    if (era === 0) {
-      // The first shared hall is an oversized timber-and-thatch gathering lodge.
+    if (era <= 1 && this.themeId === "ancient") {
+      // The village keeps its shared timber-and-thatch lodge until stonework is unlocked.
       const lodge = new Group();
       this.makeAncientHut(lodge);
       lodge.scale.setScalar(1.4);
@@ -553,9 +672,10 @@ export class ChatCity {
       const tile = pool[Math.floor(this.random() * pool.length)];
       for (const tree of tile.trees) tile.group.remove(tree);
       tile.trees = [];
+      this.connectNewBuilding(tile);
       if (kind === "house") this.makeHouse(tile, immediate); else this.makeLandmark(tile, immediate);
       this.totalBuildings++;
-      if (this.totalBuildings >= this.nextExpansionAt) this.expandPlot();
+      if (this.themeId === "ancient" && this.technologyEra <= 1 && this.totalBuildings % 2 === 0) this.addAnimal(tile);
     }
   }
 
@@ -605,7 +725,8 @@ export class ChatCity {
   }
 
   apply(event: SimEvent, historical = false) {
-    if (event.type === "build") this.build(event.kind, event.count, historical);
+    if (event.type === "advancement") this.unlockTechnology(event.era);
+    else if (event.type === "build") this.build(event.kind, event.count, historical);
     else if (event.type === "boom") this.boom(event.viewers, historical);
     else if (event.type === "disaster") this.disaster(event.intensity, historical);
     else if (event.type === "effect" && !historical) this.fireworks(0, 0, event.intensity);
@@ -697,6 +818,7 @@ export class ChatCity {
     this.viewSpan += (this.targetSpan - this.viewSpan) * (1 - Math.exp(-3.6 * delta));
     if (Math.abs(oldSpan - this.viewSpan) > 0.001) this.updateCameraFrustum();
     this.updateBuildings(delta);
+    this.updateActors(delta);
     this.updateParticles(delta);
     this.renderer.render(this.scene, this.camera);
   };

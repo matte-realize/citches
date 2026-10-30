@@ -12,6 +12,7 @@ export type Category = "RAID" | "SPAM" | "QUESTION" | "HATE" | "COMMENT";
 export interface Counts { RAID: number; SPAM: number; QUESTION: number; HATE: number; COMMENT: number }
 export interface Aggregate { timestamp: number; counts: Counts; messagesPerSecond: number; raidViewers: number; supportPoints: number }
 export type SimEvent =
+  | { type: "advancement"; era: number; name: string }
   | { type: "build"; kind: "house" | "landmark"; count: number }
   | { type: "effect"; kind: "fireworks"; intensity: number }
   | { type: "boom"; viewers: number }

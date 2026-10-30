@@ -16,6 +16,18 @@ export const config = {
     longevityMultiplier: 0.45, longevityMinutes: 30,
     buildCooldownMs: 2200, maxBuildsPerPulse: 3
   },
+  technology: {
+    milestones: [
+      { name: "VILLAGE & FARMING", points: 65 },
+      { name: "BRONZE & MASONRY", points: 180 },
+      { name: "CLASSICAL KINGDOM", points: 360 },
+      { name: "INDUSTRIAL CITY", points: 650 },
+      { name: "AGE OF AIRSHIPS", points: 1000 },
+      { name: "EMPIRE", points: 1450 }
+    ],
+    chatPoint: 0.12, complexityPoint: 0.42, positivityPoint: 0.7,
+    supportPointMultiplier: 1.3
+  },
   support: {
     bitsPerPoint: 100, subscriptionPoints: 2.5, giftPoints: 3.5,
     mysteryGiftPointsPerSub: 1.2, growthMultiplier: 0.42

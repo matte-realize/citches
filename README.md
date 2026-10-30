@@ -21,10 +21,10 @@ Ordinary short messages add a small amount of progress. Longer, more varied and 
 
 Twitch Bits/cheers, subscriptions, resubs, and gifted subscriptions add shared support progress. Emotes are normalized by occurrence, not just unique emote type. External cash donation alerts (such as Streamlabs or StreamElements) are not available through anonymous Twitch IRC; they need a separate authorized integration.
 
-The renderer starts in the Ancient Civilization era with a founding hall. Community milestones advance it through classical, medieval, industrial, modern, and empire eras, opening larger rings of land as it grows. Theme palettes are selected by the streamer’s hosted view URL; the rendering class and stable event protocol are kept separate from the chat transport so an extension adapter can replace the local WebSocket later.
+The renderer starts as a small founding village of thatch huts and shared fires. It lays footpaths from home to home as each hut is built; community technology milestones upgrade those trails into stone streets and later paved roads while opening new rings of land. Milestones are earned from thoughtful, positive chat over time and fan support, not just raw message count. Livestock appears around the early village, wagons arrive with bronze and masonry, cars unlock in the industrial city, and blimps follow in the age of airships. The streamer’s selected theme stays in the hosted view URL; the rendering class and event protocol remain separate from chat transport so an extension adapter can replace the local WebSocket later.
 
 ## Data and tuning
 
 Live messages are appended to `logs/<channel>-<UTC-date>.jsonl`. Replay accepts raw log rows and normalized `{timestamp,user,text,emotes,isRaid,raidViewerCount}` rows; replay speed `2` runs twice as fast.
 
-Rule keywords, growth thresholds, multipliers, support weights, and event thresholds are in `src/config.ts`. `ingest/`, `classify/`, `aggregate/`, and `events/` remain separate modules under `src/`. The browser receives `{type:"tick", aggregate, events}`. `SimEvent` shapes are in `src/types.ts` and remain unchanged by the visual themes.
+Rule keywords, growth and technology milestones, multipliers, support weights, and event thresholds are in `src/config.ts`. `ingest/`, `classify/`, `aggregate/`, and `events/` remain separate modules under `src/`. The browser receives `{type:"tick", aggregate, events}`. Event shapes are in `src/types.ts`; new advancement events add milestone unlocks while leaving existing build and effect events intact.
