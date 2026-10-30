@@ -5,7 +5,7 @@ const host = document.querySelector<HTMLDivElement>("#app")!;
 const city = new ChatCity(host, themeFromSearch());
 const overlay = document.createElement("div");
 overlay.className = "debug";
-overlay.innerHTML = '<div class="debug-title"><span class="live-dot"></span>FANDOM CITY <span class="debug-subtitle">COMMUNITY BUILT</span></div><div class="debug-stage"></div><label class="theme-picker">CITY THEME <select aria-label="Choose civilization theme"><option value="ancient">Ancient Empire</option><option value="fantasy">Mythic Realm</option><option value="solarpunk">Solarpunk Haven</option><option value="cyberpunk">Neon Megacity</option></select></label><div class="debug-rate">Connecting…</div><div class="debug-counts"></div>';
+overlay.innerHTML = '<div class="debug-title"><span class="live-dot"></span>FANDOM CITY <span class="debug-subtitle">COMMUNITY BUILT</span></div><div class="debug-stage"></div><label class="theme-picker">CIVILIZATION <select aria-label="Choose civilization theme"><option value="egypt">Nile Kingdom</option><option value="rome">Roman Republic</option><option value="norse">Norse Settlement</option><option value="japan">Imperial Japan</option></select></label><div class="debug-rate">Connecting…</div><div class="debug-counts"></div>';
 document.body.appendChild(overlay);
 const progressPanel = document.createElement("section");
 progressPanel.className = "progress-panel";
@@ -47,10 +47,11 @@ socket.onmessage = message => {
     const techPercent = Math.max(0, Math.min(100, Math.round(tech.ratio * 100)));
     technologyFill.style.width = `${techPercent}%`;
     technologyTrack.setAttribute("aria-valuenow", String(techPercent));
-    technologyValue.textContent = tech.ratio >= 1 ? "READY" : `${techPercent}%`;
+    technologyValue.textContent = tech.ratio >= 1 ? "EMPIRE COMPLETE" : `${tech.current.toFixed(1)} / ${tech.goal.toFixed(1)} pts`;
+    progressPanel.querySelector<HTMLSpanElement>(".progress-title")!.textContent = tech.ratio >= 1 ? "CIVILIZATION PROGRESS" : `NEXT: ${tech.name}`;
     technologyCaption.textContent = tech.ratio >= 1
-      ? `${tech.name} reached · community is ready for the next step.`
-      : `${tech.name} · ${tech.current.toFixed(0)} / ${tech.goal.toFixed(0)} community points`;
+      ? "All civilization milestones reached. Your empire is complete."
+      : `${techPercent}% complete · Community points earned toward this milestone`;
     const recovery = data.progress.recovery;
     city.setCommunityProgress(recovery);
     recoveryMeter.hidden = !recovery.active;
