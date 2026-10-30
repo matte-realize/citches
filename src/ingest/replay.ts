@@ -1,18 +1,16 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { normalizeTwitchMessage, type NormalizeOverrides } from "./normalize.js";
 import type { ChatMessage, MessageSource } from "../types.js";
 
 function normalize(row: any): ChatMessage {
   if (typeof row?.timestamp === "number" && typeof row?.user === "string") return {
     timestamp: row.timestamp, user: row.user, text: row.text ?? "", emotes: row.emotes ?? [],
-    isRaid: Boolean(row.isRaid), raidViewerCount: Number(row.raidViewerCount ?? 0)
+    isRaid: Boolean(row.isRaid), raidViewerCount: Number(row.raidViewerCount ?? 0),
+    supportPoints: Number(row.supportPoints ?? 0)
   };
-  const tags = row.tags ?? {};
-  return {
-    timestamp: Number(tags["tmi-sent-ts"] ?? row.receivedAt ?? Date.now()), user: tags.username ?? tags["display-name"] ?? "anonymous",
-    text: row.text ?? "", emotes: Object.keys(tags.emotes ?? {}), isRaid: tags["msg-id"] === "raid",
-    raidViewerCount: Number(tags["msg-param-viewerCount"] ?? 0)
-  };
+  const overrides: NormalizeOverrides = { event: row.event, giftCount: row.giftCount };
+  return normalizeTwitchMessage(row.tags ?? {}, row.text ?? "", Number(row.receivedAt ?? Date.now()), overrides);
 }
 
 export class ReplaySource implements MessageSource {
