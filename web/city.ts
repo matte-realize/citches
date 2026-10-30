@@ -44,7 +44,7 @@ export class ChatCity {
   private actors: CivicActor[] = [];
   private actorClock = 0;
   private campfire?: Group;
-  private renewalComplete = false;
+  private lastRedevelopedEra = 1;
   private activeRadius = 4.5;
   private totalBuildings = 0;
   private technologyEra = 0;
@@ -199,7 +199,10 @@ export class ChatCity {
   setCommunityProgress(progress: CommunityProgress["recovery"]) {
     const wasRecovering = this.recoveryEra !== undefined;
     this.recoveryEra = progress.active ? Math.min(this.technologyEra, progress.era) : undefined;
-    if (wasRecovering && this.recoveryEra === undefined && this.technologyEra >= 4) this.renewDistrict();
+    if (wasRecovering && this.recoveryEra === undefined && this.technologyEra >= 2) {
+      this.lastRedevelopedEra = Math.min(this.lastRedevelopedEra, this.technologyEra - 1);
+      this.tryRenewDistrict();
+    }
   }
 
   private setActiveRadius(radius: number) {
@@ -567,6 +570,7 @@ export class ChatCity {
     this.technologyEra = Math.max(this.technologyEra, Math.min(6, era));
     this.upgradePaths();
     if (this.technologyEra > previousEra && this.technologyEra >= 1) this.expandPlot();
+    if (this.technologyEra > previousEra && this.technologyEra >= 2) this.tryRenewDistrict();
     if (this.technologyEra === 1) {
       const firstHome = this.tiles.find(tile => tile.building && tile.kind === "house");
       if (firstHome) { this.addAnimal(firstHome); this.addAnimal(firstHome); }
@@ -579,7 +583,6 @@ export class ChatCity {
     } else if (this.technologyEra === 4) {
       this.addCar();
       this.addCar();
-      if (this.recoveryEra === undefined) this.renewDistrict();
     } else if (this.technologyEra === 5) {
       this.addBlimp(0);
       this.addBlimp(1);
@@ -589,8 +592,9 @@ export class ChatCity {
     }
   }
 
-  private renewDistrict() {
-    if (this.renewalComplete) return;
+  private tryRenewDistrict() {
+    const era = this.technologyEra;
+    if (era < 2 || this.recoveryEra !== undefined || era <= this.lastRedevelopedEra) return;
     const homes = this.tiles.filter(tile => tile.building && tile.kind === "house");
     for (const center of homes) {
       const cluster = homes
@@ -607,11 +611,11 @@ export class ChatCity {
           this.totalBuildings = Math.max(0, this.totalBuildings - 1);
         }
       }
-      if (this.makeSkyscraper(center)) {
-        this.totalBuildings++;
-        this.renewalComplete = true;
-        return;
-      }
+      const renewed = era >= 4 ? this.makeSkyscraper(center) : this.makeLandmark(center);
+      if (!renewed) continue;
+      this.totalBuildings++;
+      this.lastRedevelopedEra = era;
+      return;
     }
   }
 
@@ -1066,6 +1070,7 @@ export class ChatCity {
       if (this.technologyEra <= 1 && this.totalBuildings % 2 === 0) this.addAnimal(tile);
       if (this.totalBuildings % 3 === 0) this.addPerson(tile, this.totalBuildings, true);
     }
+    this.tryRenewDistrict();
   }
 
   boom(viewers: number, historical = false) {
