@@ -1,4 +1,4 @@
-import { ACESFilmicToneMapping, BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OctahedronGeometry, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, Vector3, WebGLRenderer } from "three";
+import { ACESFilmicToneMapping, BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters, Object3D } from "three";
 import type { SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
@@ -12,15 +12,17 @@ type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
 
 const GRID = 32;
 export const CITY_THEMES = {
-  ancient: { label: "Ancient Empire", sky: 0x111f2a, grass: [0x355849, 0x3b604d, 0x41634f, 0x345348], road: [0x344047, 0x38434a, 0x303c42], house: [0xc99664, 0xb87d54, 0xd4bd8f, 0x9b765b], roof: [0x806041, 0x8b5a48, 0x67554a], window: [0xffd27c, 0xffe8b1, 0xf4c36f], stone: 0xb79a72, foliage: [0x538462, 0x67966c, 0x3e735e], accent: 0xd7b36c, glow: 0xf3b96e },
-  fantasy: { label: "Mythic Realm", sky: 0x181c36, grass: [0x344e48, 0x405754, 0x454b66], road: [0x34394d, 0x3e4056, 0x303646], house: [0x8e83aa, 0xb07d86, 0x7f9d99, 0xc2a77a], roof: [0x554b74, 0x7d526e, 0x46616e], window: [0x8ff0e0, 0xd8afff, 0xffd982], stone: 0x9e9fb8, foliage: [0x5b977d, 0x609c8c, 0x4a806e], accent: 0xa8efd7, glow: 0x75e4dc },
-  solarpunk: { label: "Solarpunk Haven", sky: 0x14272b, grass: [0x416448, 0x4f7050, 0x3f6048], road: [0x3a4744, 0x424e49, 0x35433e], house: [0xc5a679, 0xb8c18e, 0x8eb29d, 0xe0c18b], roof: [0x54725b, 0x66815e, 0x927650], window: [0xffd98a, 0xb8efe2, 0xffecb5], stone: 0xa9b294, foliage: [0x69a46f, 0x81b67d, 0x508769], accent: 0x9de5be, glow: 0x92efc5 },
-  cyberpunk: { label: "Neon Megacity", sky: 0x100f25, grass: [0x253445, 0x29364b, 0x293347], road: [0x29283d, 0x323048, 0x242438], house: [0x566682, 0x66547d, 0x486e78, 0x80607e], roof: [0x37364f, 0x4d385c, 0x344859], window: [0x52f2e1, 0xff77cc, 0xffc46e], stone: 0x737594, foliage: [0x3b806e, 0x52896c, 0x416d71], accent: 0xff77cc, glow: 0x42e8ec }
+  egypt: { label: "Nile Kingdom", sky: 0x172937, grass: [0x4e7058, 0x57775c, 0x647a58, 0x436b5d], road: [0x826f56, 0x927f61, 0x73654e], house: [0xc69c62, 0xd3ae72, 0xb88650, 0xd8c08b], roof: [0xa27b46, 0xb18b52, 0x8a693e], window: [0xf4d58c, 0xffe6aa, 0xc79c55], stone: 0xc9b27d, foliage: [0x51836a, 0x65936e, 0x46765f], accent: 0x45a6a0, glow: 0xffd275 },
+  rome: { label: "Roman Republic", sky: 0x202c36, grass: [0x426348, 0x4b684c, 0x586c4e, 0x3e5b45], road: [0x635f56, 0x726d60, 0x5c584f], house: [0xc98f68, 0xd3b68c, 0xb97d59, 0xe0cda6], roof: [0x984f3d, 0xb05b42, 0x8b493b], window: [0xffd58d, 0xf4e0b4, 0xf2c16e], stone: 0xd1c2a0, foliage: [0x4c7953, 0x64865a, 0x426b4d], accent: 0x9b563f, glow: 0xf2c77c },
+  norse: { label: "Norse Settlement", sky: 0x263642, grass: [0x3e5b50, 0x466456, 0x526b5a, 0x3a554b], road: [0x5c6057, 0x6b6b5c, 0x50574e], house: [0x9d7b53, 0xb39360, 0x79634b, 0xc0a778], roof: [0x4e5b47, 0x6b704f, 0x5d483a], window: [0xf1c978, 0xe8d29d, 0xffdc8b], stone: 0x9b927c, foliage: [0x477252, 0x56805b, 0x3b654c], accent: 0xd2a75f, glow: 0xf3bd68 },
+  japan: { label: "Imperial Japan", sky: 0x282d3d, grass: [0x3d6550, 0x4e7057, 0x5b775d, 0x3e5f4e], road: [0x68695f, 0x777466, 0x5d6259], house: [0xb98a64, 0xc8aa82, 0x9f7158, 0xd5bd92], roof: [0x454a50, 0x5c514b, 0x77604e], window: [0xffd99b, 0xf4e6c7, 0xffc878], stone: 0xb5a88d, foliage: [0x517853, 0x67905e, 0x49755e], accent: 0xb84748, glow: 0xf1c879 }
 } as const;
 export type CityThemeId = keyof typeof CITY_THEMES;
 export function themeFromSearch(search = window.location.search): CityThemeId {
   const choice = new URLSearchParams(search).get("theme");
-  return choice && choice in CITY_THEMES ? choice as CityThemeId : "ancient";
+  const aliases: Record<string, CityThemeId> = { ancient: "egypt", fantasy: "rome", solarpunk: "norse", cyberpunk: "japan" };
+  if (choice && choice in CITY_THEMES) return choice as CityThemeId;
+  return choice ? aliases[choice] ?? "egypt" : "egypt";
 }
 
 const mat = (color: ColorRepresentation, roughness = 0.88, extra: Partial<MeshStandardMaterialParameters> = {}) =>
@@ -746,7 +748,7 @@ export class ChatCity {
         chimney.castShadow = true;
       }
     } else {
-      const capColor = era >= 4 && this.themeId === "cyberpunk" ? 0x31314d : 0x384a4b;
+      const capColor = this.themeId === "japan" ? 0x45434a : this.themeId === "egypt" ? 0xa88b5d : 0x384a4b;
       this.box(building, width + 0.08, 0.1, depth + 0.08, capColor, 0, height + 0.22, 0);
       if (floors >= 4) {
         for (let floor = 1; floor < floors; floor++) {
@@ -761,7 +763,7 @@ export class ChatCity {
         building.add(rooftop);
       }
     }
-    this.addThemeDetails(building, width, height, depth);
+    this.addThemeDetails(building, width, height, depth, era);
     if (!this.connectNewBuilding(tile, building)) return false;
     tile.group.add(building);
     tile.building = building;
@@ -771,64 +773,81 @@ export class ChatCity {
   }
 
   private makeAncientHut(building: Group, includeHearth = false) {
-    const plaster = mat(this.color([0xb59a69, 0xa78658, 0xc0a775, 0x92744f]), 1);
-    const thatchColors = [0x9d7945, 0xb28c50, 0xc09a59, 0x886b40];
-    const wood = mat(0x513925, 1);
-    this.box(building, 1.02, 0.11, 0.98, 0x756044, 0, 0.11, 0);
-    const walls = new Mesh(new CylinderGeometry(0.42, 0.49, 0.68, 9, 1), plaster);
-    walls.position.y = 0.48;
-    walls.castShadow = true;
-    walls.receiveShadow = true;
-    building.add(walls);
+    const woodColor = this.themeId === "norse" ? 0x493525 : this.themeId === "japan" ? 0x573c30 : 0x745133;
+    const wood = mat(woodColor, 1);
+    const wallColor = this.color(this.theme.house);
+    const roofColor = this.color(this.theme.roof);
 
-    // Exposed timber uprights and a rough ring beam make the hut read as hand-built.
-    for (let i = 0; i < 8; i++) {
-      const angle = i * Math.PI / 4;
-      this.box(building, 0.075, 0.82, 0.075, 0, Math.cos(angle) * 0.45, 0.53, Math.sin(angle) * 0.45, wood);
-    }
-    const ringBeam = new Mesh(new CylinderGeometry(0.5, 0.5, 0.075, 9), wood);
-    ringBeam.position.y = 0.88;
-    building.add(ringBeam);
-
-    const roofColor = this.color(thatchColors);
-    const roof = new Mesh(new ConeGeometry(0.72, 0.78, 9), mat(roofColor, 1));
-    roof.position.y = 1.18;
-    roof.castShadow = true;
-    building.add(roof);
-    // Short straw-colored ribs break up the smooth cone and catch the light.
-    for (let i = 0; i < 12; i++) {
-      const angle = (i / 12) * Math.PI * 2;
-      const rib = new Mesh(new CylinderGeometry(0.018, 0.026, 0.73, 4), mat(this.color(thatchColors), 1));
-      rib.position.set(Math.cos(angle) * 0.36, 1.22, Math.sin(angle) * 0.36);
-      rib.rotation.z = -Math.cos(angle) * 0.42;
-      rib.rotation.x = Math.sin(angle) * 0.42;
-      building.add(rib);
-    }
-    const door = this.box(building, 0.21, 0.42, 0.055, 0, 0, 0.35, 0.47, wood);
-    door.rotation.y = 0.08;
-
-    if (includeHearth) {
-      const hearth = new Group();
-      hearth.position.set(0.49, 0.1, 0.53);
-      for (let i = 0; i < 7; i++) {
-        const angle = i * Math.PI * 2 / 7;
-        const stone = new Mesh(new IcosahedronGeometry(0.075, 0), mat(i % 2 ? 0x786f58 : 0x938366));
-        stone.scale.set(1.2, 0.7, 0.9);
-        stone.position.set(Math.cos(angle) * 0.22, 0, Math.sin(angle) * 0.22);
-        hearth.add(stone);
+    if (this.themeId === "norse") {
+      this.box(building, 1.02, 0.12, 0.96, this.theme.stone, 0, 0.12, 0);
+      this.box(building, 0.86, 0.58, 0.74, 0, 0, 0.47, 0, mat(wallColor, 1));
+      for (const x of [-0.43, 0.43]) this.box(building, 0.08, 0.92, 0.08, 0, x, 0.58, 0, wood);
+      const leftRoof = this.box(building, 0.62, 0.12, 1.0, 0, -0.24, 0.91, 0, mat(roofColor, 1));
+      leftRoof.rotation.z = -0.61;
+      const rightRoof = this.box(building, 0.62, 0.12, 1.0, 0, 0.24, 0.91, 0, mat(roofColor, 1));
+      rightRoof.rotation.z = 0.61;
+      this.box(building, 0.12, 0.12, 1.05, 0, 0, 1.22, 0, wood);
+      this.box(building, 0.2, 0.4, 0.06, 0, 0, 0.34, 0.4, wood);
+    } else if (this.themeId === "japan") {
+      this.box(building, 0.94, 0.1, 0.9, 0x704f3a, 0, 0.18, 0, wood);
+      this.box(building, 0.78, 0.52, 0.66, 0, 0, 0.51, 0, mat(wallColor, 0.92));
+      for (const x of [-0.36, 0.36]) for (const z of [-0.3, 0.3]) this.box(building, 0.055, 0.82, 0.055, 0, x, 0.55, z, wood);
+      const leftRoof = this.box(building, 0.62, 0.1, 0.96, 0, -0.25, 0.89, 0, mat(roofColor, 0.82));
+      leftRoof.rotation.z = -0.48;
+      const rightRoof = this.box(building, 0.62, 0.1, 0.96, 0, 0.25, 0.89, 0, mat(roofColor, 0.82));
+      rightRoof.rotation.z = 0.48;
+      this.box(building, 0.2, 0.42, 0.055, 0, 0, 0.36, 0.35, wood);
+      for (const x of [-0.38, 0.38]) this.box(building, 0.12, 0.045, 0.12, 0, x, 0.92, 0.38, mat(this.theme.accent, 0.65));
+    } else if (this.themeId === "rome") {
+      this.box(building, 0.96, 0.12, 0.9, this.theme.stone, 0, 0.12, 0);
+      this.box(building, 0.78, 0.56, 0.68, 0, 0, 0.48, 0, mat(wallColor, 1));
+      for (const x of [-0.38, 0.38]) this.box(building, 0.07, 0.82, 0.07, 0, x, 0.57, 0, wood);
+      const roof = new Mesh(new ConeGeometry(0.68, 0.58, 4), mat(roofColor, 1));
+      roof.rotation.y = Math.PI / 4; roof.position.y = 1.0; building.add(roof);
+      this.box(building, 0.2, 0.4, 0.055, 0, 0, 0.33, 0.36, wood);
+    } else {
+      const plaster = mat(wallColor, 1);
+      this.box(building, 1.02, 0.11, 0.98, this.theme.stone, 0, 0.11, 0);
+      const walls = new Mesh(new CylinderGeometry(0.42, 0.49, 0.68, 9, 1), plaster);
+      walls.position.y = 0.48; walls.castShadow = true; walls.receiveShadow = true; building.add(walls);
+      for (let i = 0; i < 8; i++) {
+        const angle = i * Math.PI / 4;
+        this.box(building, 0.075, 0.82, 0.075, 0, Math.cos(angle) * 0.45, 0.53, Math.sin(angle) * 0.45, wood);
       }
-      const logA = new Mesh(new CylinderGeometry(0.035, 0.045, 0.34, 6), wood);
-      logA.rotation.z = Math.PI / 2; logA.rotation.y = 0.4; hearth.add(logA);
-      const logB = logA.clone(); logB.rotation.y = -0.5; hearth.add(logB);
-      for (let i = 0; i < 3; i++) {
-        const flame = new Mesh(new ConeGeometry(0.075 - i * 0.012, 0.25 + i * 0.08, 6), mat(i === 1 ? 0xffa43d : 0xffd26b, 0.45, { emissive: i === 1 ? 0xff4e14 : 0xf28a23, emissiveIntensity: 1.8 }));
-        flame.position.set((i - 1) * 0.055, 0.17 + i * 0.035, (i % 2) * 0.045);
-        flame.userData.hearthPhase = i * 1.7;
-        hearth.add(flame);
+      const ringBeam = new Mesh(new CylinderGeometry(0.5, 0.5, 0.075, 9), wood);
+      ringBeam.position.y = 0.88; building.add(ringBeam);
+      const roof = new Mesh(new ConeGeometry(0.72, 0.78, 9), mat(roofColor, 1));
+      roof.position.y = 1.18; roof.castShadow = true; building.add(roof);
+      for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2;
+        const rib = new Mesh(new CylinderGeometry(0.018, 0.026, 0.73, 4), mat(this.color(this.theme.roof), 1));
+        rib.position.set(Math.cos(angle) * 0.36, 1.22, Math.sin(angle) * 0.36);
+        rib.rotation.z = -Math.cos(angle) * 0.42; rib.rotation.x = Math.sin(angle) * 0.42; building.add(rib);
       }
-      building.add(hearth);
-      building.userData.hearth = hearth;
+      const door = this.box(building, 0.21, 0.42, 0.055, 0, 0, 0.35, 0.47, wood);
+      door.rotation.y = 0.08;
     }
+
+    if (includeHearth) this.addCookingHearth(building, wood);
+  }
+
+  private addCookingHearth(parent: Group, wood = mat(0x493321, 1)) {
+    const hearth = new Group();
+    hearth.position.set(0.49, 0.1, 0.53);
+    for (let i = 0; i < 7; i++) {
+      const angle = i * Math.PI * 2 / 7;
+      const stone = new Mesh(new IcosahedronGeometry(0.075, 0), mat(i % 2 ? 0x786f58 : 0x938366));
+      stone.scale.set(1.2, 0.7, 0.9); stone.position.set(Math.cos(angle) * 0.22, 0, Math.sin(angle) * 0.22); hearth.add(stone);
+    }
+    const logA = new Mesh(new CylinderGeometry(0.035, 0.045, 0.34, 6), wood);
+    logA.rotation.z = Math.PI / 2; logA.rotation.y = 0.4; hearth.add(logA);
+    const logB = logA.clone(); logB.rotation.y = -0.5; hearth.add(logB);
+    for (let i = 0; i < 3; i++) {
+      const flame = new Mesh(new ConeGeometry(0.075 - i * 0.012, 0.25 + i * 0.08, 6), mat(i === 1 ? 0xffa43d : 0xffd26b, 0.45, { emissive: i === 1 ? 0xff4e14 : 0xf28a23, emissiveIntensity: 1.8 }));
+      flame.position.set((i - 1) * 0.055, 0.17 + i * 0.035, (i % 2) * 0.045); flame.userData.hearthPhase = i * 1.7; hearth.add(flame);
+    }
+    parent.add(hearth);
+    parent.userData.hearth = hearth;
   }
 
   private makeLandmark(tile: Tile, immediate = false): boolean {
@@ -841,26 +860,8 @@ export class ChatCity {
       this.makeAncientHut(lodge);
       lodge.scale.setScalar(1.4);
       building.add(lodge);
-    } else if (era === 2) {
-      this.box(building, 0.96, 0.4, 0.96, 0, 0, 0.28, 0, stone);
-      this.box(building, 0.62, 2.5, 0.62, 0, 0, 1.73, 0, mat(0x77736b));
-      this.addWindows(building, 0.62, 0.62, 2.5, 5, 2);
-      for (const [x, z] of [[-0.29,-0.29],[0.29,-0.29],[-0.29,0.29],[0.29,0.29]]) {
-        this.box(building, 0.18, 0.36, 0.18, 0x625d57, x, 3.16, z);
-      }
-      this.box(building, 0.82, 0.12, 0.82, 0x625d57, 0, 2.99, 0);
-      const flag = this.box(building, 0.025, 0.75, 0.025, this.theme.accent, 0, 3.55, 0);
-      this.box(building, 0.34, 0.22, 0.025, this.theme.accent, 0.13, 3.78, 0);
-      flag.castShadow = true;
-    } else if (era === 3) {
-      const brick = mat(this.theme.house[1], 0.88);
-      this.box(building, 0.92, 2.25, 0.82, 0, 0, 1.205, 0, brick);
-      this.addWindows(building, 0.92, 0.82, 2.25, 5, 3);
-      const clock = new Mesh(new CylinderGeometry(0.19, 0.19, 0.035, 16), mat(0xe6d09a, 0.4));
-      clock.rotation.x = Math.PI / 2; clock.position.set(0, 2.05, 0.43); building.add(clock);
-      this.box(building, 0.28, 1.1, 0.28, 0x6a5548, 0.27, 2.9, -0.12);
-      const smoke = new Mesh(new ConeGeometry(0.22, 0.48, 8), mat(0x69584d));
-      smoke.position.set(0.27, 3.68, -0.12); building.add(smoke);
+    } else if (era === 2 || era === 3) {
+      this.makeThemeLandmark(building, era, stone);
     } else {
       const style = Math.floor(this.random() * 3);
       if (style === 0) {
@@ -893,7 +894,7 @@ export class ChatCity {
     if (era > 1) {
       this.box(building, 0.2, 0.4, 0.055, 0, 0, 0.23, 0.48, mat(0x513925, 1));
     }
-    if (era > 1) this.addThemeDetails(building, 0.75, 2.5, 0.75);
+    if (era > 1) this.addThemeDetails(building, 0.75, 2.5, 0.75, era);
     if (!this.connectNewBuilding(tile, building)) return false;
     tile.group.add(building);
     tile.building = building;
@@ -925,22 +926,109 @@ export class ChatCity {
     return true;
   }
 
-  private addThemeDetails(building: Group, width: number, height: number, depth: number) {
-    if (this.themeId === "cyberpunk") {
-      for (const x of [-width * 0.38, width * 0.38]) {
-        const strip = new Mesh(new BoxGeometry(0.035, Math.min(height * 0.82, 3.4), 0.028), mat(this.theme.accent, 0.25, { emissive: this.theme.glow, emissiveIntensity: 1.7 }));
-        strip.position.set(x, Math.min(height * 0.55, 1.8), depth / 2 + 0.03); building.add(strip);
+  private makeThemeLandmark(building: Group, era: number, stone: MeshStandardMaterial) {
+    const wood = mat(0x62462e, 1);
+    if (this.themeId === "egypt") {
+      this.box(building, 0.98, 0.18, 0.98, 0, 0, 0.16, 0, stone);
+      if (era === 2) {
+        this.box(building, 0.82, 0.42, 0.82, 0, 0, 0.43, 0, mat(0xcab477, 1));
+        this.box(building, 0.62, 0.42, 0.62, 0, 0, 0.85, 0, mat(0xd4bd83, 1));
+        this.box(building, 0.4, 0.4, 0.4, 0, 0, 1.25, 0, mat(0xddc78d, 1));
+        const cap = new Mesh(new ConeGeometry(0.29, 0.48, 4), mat(0xc7a967, 1));
+        cap.rotation.y = Math.PI / 4; cap.position.y = 1.69; building.add(cap);
+      } else {
+        this.box(building, 0.9, 0.18, 0.82, 0, 0, 0.34, 0, mat(0xd4c08e, 1));
+        for (const x of [-0.36, 0, 0.36]) {
+          const column = new Mesh(new CylinderGeometry(0.075, 0.09, 1.2, 8), mat(0xc3aa70, 1));
+          column.position.set(x, 0.98, 0.25); building.add(column);
+          this.box(building, 0.2, 0.08, 0.2, 0, x, 1.61, 0.25, mat(0xd9c38d, 1));
+        }
+        this.box(building, 0.96, 0.2, 0.86, 0, 0, 1.73, 0, mat(0xd5bf87, 1));
+        const obelisk = new Mesh(new ConeGeometry(0.13, 1.0, 4), mat(this.theme.accent, 0.75));
+        obelisk.position.set(0.3, 0.72, -0.3); building.add(obelisk);
       }
-    } else if (this.themeId === "solarpunk") {
-      const planter = this.box(building, width * 0.8, 0.06, depth * 0.7, 0x476c4d, 0, height + 0.28, 0);
-      for (const x of [-0.18, 0.18]) {
-        const plant = new Mesh(new ConeGeometry(0.09, 0.22, 5), mat(this.theme.accent));
-        plant.position.set(x, height + 0.42, 0); building.add(plant);
+    } else if (this.themeId === "rome") {
+      this.box(building, 1.0, 0.24, 0.94, 0, 0, 0.2, 0, stone);
+      if (era === 2) {
+        for (const x of [-0.34, 0, 0.34]) {
+          const column = new Mesh(new CylinderGeometry(0.07, 0.085, 1.2, 10), mat(0xe0d3b5, 0.7));
+          column.position.set(x, 0.91, 0.28); building.add(column);
+          const capital = this.box(building, 0.16, 0.09, 0.16, 0, x, 1.56, 0.28, mat(0xd8c59e, 0.7));
+          capital.castShadow = true;
+        }
+        this.box(building, 0.98, 0.2, 0.88, 0, 0, 1.66, 0, mat(this.theme.house[1], 0.86));
+        const pediment = new Mesh(new ConeGeometry(0.68, 0.48, 4), mat(this.theme.stone, 0.72));
+        pediment.rotation.y = Math.PI / 4; pediment.position.y = 1.98; building.add(pediment);
+      } else {
+        for (const x of [-0.36, 0.36]) this.box(building, 0.16, 1.35, 0.2, 0, x, 0.99, 0.32, mat(0xc8b998, 0.72));
+        const arch = new Mesh(new TorusGeometry(0.36, 0.085, 8, 18, Math.PI), mat(0xc8b998, 0.72));
+        arch.position.set(0, 1.53, 0.32); building.add(arch);
+        this.box(building, 0.98, 0.18, 0.3, 0, 0, 2.03, 0.24, mat(this.theme.house[1], 0.85));
+        this.box(building, 0.12, 0.42, 0.08, 0, 0, 2.32, 0.24, mat(this.theme.accent, 0.7));
       }
-      planter.receiveShadow = true;
-    } else if (this.themeId === "fantasy") {
-      const crystal = new Mesh(new OctahedronGeometry(0.1), mat(this.theme.accent, 0.2, { emissive: this.theme.glow, emissiveIntensity: 1.3 }));
-      crystal.position.set(0, height + 0.3, 0); building.add(crystal);
+    } else if (this.themeId === "norse") {
+      this.box(building, 0.98, 0.18, 0.94, 0, 0, 0.16, 0, stone);
+      if (era === 2) {
+        this.box(building, 0.78, 0.76, 0.68, 0, 0, 0.63, 0, wood);
+        for (const x of [-0.4, 0.4]) this.box(building, 0.08, 1.15, 0.08, 0, x, 0.72, 0, mat(0x493525, 1));
+        const left = this.box(building, 0.6, 0.14, 0.92, 0, -0.22, 1.18, 0, mat(this.theme.roof[0], 1)); left.rotation.z = -0.62;
+        const right = this.box(building, 0.6, 0.14, 0.92, 0, 0.22, 1.18, 0, mat(this.theme.roof[0], 1)); right.rotation.z = 0.62;
+        this.box(building, 0.1, 0.1, 1.0, 0, 0, 1.48, 0, wood);
+      } else {
+        this.box(building, 0.7, 2.25, 0.7, 0, 0, 1.39, 0, stone);
+        this.addWindows(building, 0.7, 0.7, 2.25, 4, 2);
+        const roof = new Mesh(new ConeGeometry(0.58, 0.75, 5), mat(this.theme.roof[1], 1));
+        roof.position.y = 2.93; building.add(roof);
+        this.box(building, 0.08, 0.68, 0.08, 0, 0, 3.48, 0, wood);
+        this.box(building, 0.34, 0.15, 0.04, 0, 0.1, 3.67, 0, mat(this.theme.accent, 0.8));
+      }
+    } else {
+      this.box(building, 0.98, 0.18, 0.94, 0, 0, 0.16, 0, stone);
+      this.box(building, 0.56, era === 2 ? 1.6 : 2.2, 0.56, 0, 0, era === 2 ? 1.05 : 1.35, 0, wood);
+      const tiers = era === 2 ? 3 : 4;
+      for (let tier = 0; tier < tiers; tier++) {
+        const y = 0.58 + tier * 0.52;
+        const width = 0.92 - tier * 0.13;
+        this.box(building, width, 0.1, width, 0, 0, y, 0, mat(this.theme.roof[tier % this.theme.roof.length], 0.82));
+        for (const x of [-width * 0.42, width * 0.42]) {
+          const eave = this.box(building, 0.16, 0.07, width * 1.1, 0, x, y + 0.05, 0, mat(this.theme.roof[tier % this.theme.roof.length], 0.8));
+          eave.rotation.z = x < 0 ? -0.12 : 0.12;
+        }
+      }
+    }
+  }
+
+  private addThemeDetails(building: Group, width: number, height: number, depth: number, era: number) {
+    if (era <= 1) return;
+    if (this.themeId === "egypt") {
+      for (const x of [-width * 0.36, width * 0.36]) {
+        const pilaster = new Mesh(new CylinderGeometry(0.035, 0.05, Math.min(height * 0.9, 2.4), 7), mat(0xc4a86f, 0.92));
+        pilaster.position.set(x, height / 2 + 0.16, depth / 2 + 0.025); building.add(pilaster);
+      }
+      const lintel = this.box(building, width * 0.94, 0.07, 0.07, 0, 0, height + 0.19, depth / 2 + 0.035, mat(0xb18a4d, 0.85));
+      lintel.receiveShadow = true;
+    } else if (this.themeId === "rome") {
+      for (const x of [-width * 0.36, width * 0.36]) {
+        const column = new Mesh(new CylinderGeometry(0.035, 0.05, Math.min(height * 0.9, 2.2), 8), mat(0xe0d3b5, 0.78));
+        column.position.set(x, height / 2 + 0.16, depth / 2 + 0.04); building.add(column);
+        this.box(building, 0.12, 0.055, 0.12, 0, x, height + 0.19, depth / 2 + 0.04, mat(0xd4c29f, 0.8));
+      }
+      this.box(building, width * 1.04, 0.075, 0.12, 0, 0, height + 0.24, depth / 2 + 0.04, mat(this.theme.roof[0], 0.86));
+    } else if (this.themeId === "norse") {
+      for (const x of [-width * 0.4, width * 0.4]) {
+        this.box(building, 0.055, height * 0.94, 0.06, 0, x, height / 2 + 0.16, depth / 2 + 0.035, mat(0x493525, 1));
+      }
+      this.box(building, width * 1.04, 0.08, 0.09, 0, 0, height * 0.62, depth / 2 + 0.04, mat(0x493525, 1));
+    } else {
+      this.box(building, width * 1.2, 0.07, depth * 1.16, 0, 0, height + 0.18, 0, mat(this.theme.roof[0], 0.82));
+      for (const x of [-width * 0.57, width * 0.57]) {
+        const bracket = this.box(building, 0.08, 0.2, 0.08, 0, x, height + 0.1, depth * 0.43, mat(0x5d4536, 0.95));
+        bracket.rotation.z = x < 0 ? -0.25 : 0.25;
+      }
+      if (era >= 3) {
+        const lantern = new Mesh(new BoxGeometry(0.12, 0.17, 0.12), mat(this.theme.accent, 0.7, { emissive: this.theme.accent, emissiveIntensity: 0.16 }));
+        lantern.position.set(width * 0.42, Math.min(height * 0.58, 1.3), depth / 2 + 0.07); building.add(lantern);
+      }
     }
   }
 
