@@ -1,6 +1,7 @@
 import { ACESFilmicToneMapping, BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OctahedronGeometry, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters, Object3D } from "three";
 import type { SimEvent } from "../src/types.js";
+import type { CommunityProgress } from "../src/types.js";
 
 type TileKind = "empty" | "house" | "landmark" | "fire";
 type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number };
@@ -45,6 +46,7 @@ export class ChatCity {
   private activeRadius = 4.5;
   private totalBuildings = 0;
   private technologyEra = 0;
+  private recoveryEra?: number;
   private plotBorder?: LineLoop;
   private theme: typeof CITY_THEMES[CityThemeId];
   private themeId: CityThemeId;
@@ -180,16 +182,23 @@ export class ChatCity {
     this.camera.updateProjectionMatrix();
   }
 
-  private get eraIndex(): number { return this.technologyEra; }
+  private get eraIndex(): number { return this.recoveryEra ?? this.technologyEra; }
 
   get stage(): string {
-    return ["CAMPFIRE SETTLEMENT", "HUTS & GATHERING", "SETTLED HOMES", "STONE CITY", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE"][this.eraIndex];
+    const era = ["CAMPFIRE SETTLEMENT", "HUTS & GATHERING", "SETTLED HOMES", "STONE CITY", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE"][this.eraIndex];
+    return this.recoveryEra === undefined ? era : `RECOVERY · ${era}`;
   }
 
   get themeName(): string { return this.theme.label.toUpperCase(); }
   get selectedThemeId(): CityThemeId { return this.themeId; }
 
   get landArea(): number { return this.tiles.filter(tile => tile.group.visible).length; }
+
+  setCommunityProgress(progress: CommunityProgress["recovery"]) {
+    const wasRecovering = this.recoveryEra !== undefined;
+    this.recoveryEra = progress.active ? Math.min(this.technologyEra, progress.era) : undefined;
+    if (wasRecovering && this.recoveryEra === undefined && this.technologyEra >= 4) this.renewDistrict();
+  }
 
   private setActiveRadius(radius: number) {
     this.activeRadius = radius;
@@ -552,30 +561,27 @@ export class ChatCity {
   }
 
   private unlockTechnology(era: number) {
+    const previousEra = this.technologyEra;
     this.technologyEra = Math.max(this.technologyEra, Math.min(6, era));
     this.upgradePaths();
+    if (this.technologyEra > previousEra && this.technologyEra >= 1) this.expandPlot();
     if (this.technologyEra === 1) {
       const firstHome = this.tiles.find(tile => tile.building && tile.kind === "house");
       if (firstHome) { this.addAnimal(firstHome); this.addAnimal(firstHome); }
     }
     if (this.technologyEra === 2) {
-      this.expandPlot();
       this.addWagon();
       this.addWagon();
     } else if (this.technologyEra === 3) {
-      this.expandPlot();
       this.addWagon();
     } else if (this.technologyEra === 4) {
-      this.expandPlot();
       this.addCar();
       this.addCar();
-      this.renewDistrict();
+      if (this.recoveryEra === undefined) this.renewDistrict();
     } else if (this.technologyEra === 5) {
-      this.expandPlot();
       this.addBlimp(0);
       this.addBlimp(1);
     } else if (this.technologyEra === 6) {
-      this.expandPlot();
       this.addCar();
       this.addBlimp(2);
     }
@@ -980,12 +986,21 @@ export class ChatCity {
     if (!historical) this.fireworks(0, 0, Math.min(2.8, 0.8 + viewers / 800));
   }
 
-  disaster(intensity: number, historical = false) {
+  disaster(intensity: number, historical = false, damageCount?: number, durationMs = 3600) {
     const occupied = this.tiles.filter(tile => tile.building && (tile.kind === "house" || tile.kind === "landmark"));
-    const count = Math.min(occupied.length, Math.max(1, Math.ceil(intensity * 1.5)));
-    for (const tile of occupied.sort(() => this.random() - 0.5).slice(0, count)) {
+    const count = Math.min(occupied.length, Math.max(1, damageCount ?? Math.ceil(intensity * 2.4)));
+    const seed = occupied[Math.floor(this.random() * occupied.length)];
+    const damageNoise = new Map(occupied.map(tile => [tile, this.random()]));
+    const damageSet = seed
+      ? occupied.sort((a, b) => {
+          const distanceA = Math.abs(a.x - seed.x) + Math.abs(a.z - seed.z) + (damageNoise.get(a) ?? 0) * 0.25;
+          const distanceB = Math.abs(b.x - seed.x) + Math.abs(b.z - seed.z) + (damageNoise.get(b) ?? 0) * 0.25;
+          return distanceA - distanceB;
+        }).slice(0, count)
+      : [];
+    for (const tile of damageSet) {
       if (historical) this.destroyBuilding(tile);
-      else { tile.kind = "fire"; tile.burningUntil = performance.now() + 2100; this.addFlames(tile); }
+      else { tile.kind = "fire"; tile.burningUntil = performance.now() + durationMs; this.addFlames(tile); }
     }
   }
 
@@ -1023,7 +1038,7 @@ export class ChatCity {
     if (event.type === "advancement") this.unlockTechnology(event.era);
     else if (event.type === "build") this.build(event.kind, event.count, historical);
     else if (event.type === "boom") this.boom(event.viewers, historical);
-    else if (event.type === "disaster") this.disaster(event.intensity, historical);
+    else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs);
     else if (event.type === "effect" && !historical) this.fireworks(0, 0, event.intensity);
   }
 

@@ -15,10 +15,24 @@ html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; backg
 .theme-picker { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; color: #8fa99d; font-size: 8px; font-weight: 700; letter-spacing: .12em; }
 .theme-picker select { max-width: 148px; padding: 5px 7px; color: #dce9df; background: #273b3b; border: 1px solid rgba(150, 190, 169, .28); border-radius: 6px; font: inherit; letter-spacing: normal; cursor: pointer; }
 .swatch.support { background: #8ce0be; box-shadow: 0 0 7px #73d3aa; }
+.progress-panel { position: fixed; z-index: 2; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(510px, calc(100vw - 32px)); padding: 12px 15px 11px; color: #d6e4dd; background: linear-gradient(145deg, rgba(20, 35, 43, .94), rgba(21, 42, 43, .88)); border: 1px solid rgba(150, 190, 169, .26); border-radius: 11px; box-shadow: 0 10px 30px rgba(0,0,0,.24), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(12px); }
+.progress-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.progress-title, .recovery-title { color: #9bb5a8; font-size: 8px; font-weight: 750; letter-spacing: .14em; }
+.progress-value, .recovery-value { color: #efd093; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.progress-track { height: 7px; margin-top: 8px; overflow: hidden; background: rgba(7, 14, 17, .72); border: 1px solid rgba(188, 211, 194, .13); border-radius: 999px; }
+.progress-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7bb998, #d1b875); box-shadow: 0 0 12px rgba(133, 196, 154, .45); transition: width .45s ease; }
+.progress-caption, .recovery-caption { margin-top: 6px; color: #9eb1a7; font-size: 9px; line-height: 1.4; }
+.recovery-meter { margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(221, 164, 124, .2); }
+.recovery-title { color: #e1a47c; }
+.recovery-fill { background: linear-gradient(90deg, #c66d4d, #e4bd79); box-shadow: 0 0 12px rgba(220, 128, 77, .38); }
+.recovery-caption { color: #c6a897; }
 @media (max-width: 430px) {
   .debug { left: 8px; top: 8px; min-width: 0; max-width: calc(100vw - 16px); padding: 9px 10px; }
   .debug-subtitle { display: none; }
   .debug-stage { font-size: 8px; letter-spacing: .08em; }
   .debug-counts { gap: 7px 12px; }
   .debug-counts span { font-size: 8px; }
+  .progress-panel { bottom: 8px; width: calc(100vw - 16px); padding: 9px 10px; }
+  .progress-title, .recovery-title { font-size: 7px; letter-spacing: .1em; }
+  .progress-caption, .recovery-caption { font-size: 8px; }
 }
