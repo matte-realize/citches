@@ -725,31 +725,73 @@ export class ChatCity {
     }
     const width = 0.72 + this.random() * 0.2;
     const depth = 0.72 + this.random() * 0.2;
-    const style = this.random();
-    const floors = era === 2 ? (style > 0.72 ? 4 : 2)
-      : era === 3 ? (style > 0.68 ? 6 : 3)
-      : era === 4 ? (style > 0.72 ? 7 : style > 0.4 ? 5 : 3)
+    const variant = Math.floor(this.random() * 4);
+    const floors = era === 2 ? (variant === 3 ? 4 : 2)
+      : era === 3 ? (variant === 3 ? 6 : 3)
+      : era === 4 ? (variant === 3 ? 7 : variant === 2 ? 5 : 3)
       : Math.floor(4 + this.random() * 5);
     const floorHeight = era < 4 ? 0.6 : 0.68;
     const height = 0.28 + floors * floorHeight;
     const wall = mat(this.color(this.theme.house), era >= 4 ? 0.45 : 0.82, era >= 4 ? { metalness: 0.18 } : {});
     this.box(building, width + 0.12, 0.13, depth + 0.12, this.theme.stone, 0, 0.14, 0);
     this.box(building, width, height, depth, 0, 0, height / 2 + 0.16, 0, wall);
+
+    // Small attached wings, balconies, porches, and roof rooms break up the repeated box silhouette.
+    if (variant === 0) {
+      const porchDepth = 0.2;
+      this.box(building, width * 0.76, 0.075, porchDepth, this.theme.stone, 0, 0.19, depth / 2 + porchDepth / 2 - 0.015);
+      for (const x of [-width * 0.29, width * 0.29]) {
+        this.box(building, 0.045, 0.5, 0.045, this.theme.accent, x, 0.46, depth / 2 + porchDepth * 0.72, mat(this.theme.stone, 0.8));
+      }
+      const canopy = this.box(building, width * 0.9, 0.075, porchDepth * 1.16, this.theme.roof[0], 0, 0.75, depth / 2 + porchDepth * 0.58);
+      canopy.rotation.x = this.themeId === "japan" ? -0.06 : 0;
+    } else if (variant === 1) {
+      const wingWidth = width * 0.34;
+      const wingHeight = height * 0.7;
+      const wing = this.box(building, wingWidth, wingHeight, depth * 0.72, this.color(this.theme.house), -width * 0.57, wingHeight / 2 + 0.16, -depth * 0.04, mat(this.color(this.theme.house), 0.86));
+      wing.castShadow = true;
+      this.box(building, wingWidth + 0.06, 0.08, depth * 0.78, this.theme.roof[0], -width * 0.57, wingHeight + 0.2, -depth * 0.04);
+      this.box(building, 0.13, 0.31, 0.035, 0, -width * 0.57, 0.33, depth * 0.33, mat(0x624737, 0.95));
+    } else if (variant === 2 && floors > 2) {
+      const balconyY = floorHeight + 0.2;
+      this.box(building, width * 0.82, 0.07, 0.19, this.theme.stone, 0, balconyY, depth / 2 + 0.075);
+      for (const x of [-width * 0.36, -width * 0.12, width * 0.12, width * 0.36]) {
+        this.box(building, 0.035, 0.22, 0.035, this.theme.accent, x, balconyY + 0.14, depth / 2 + 0.15, mat(this.theme.stone, 0.78));
+      }
+      this.box(building, width * 0.86, 0.045, 0.045, this.theme.stone, 0, balconyY + 0.26, depth / 2 + 0.15);
+    } else if (variant === 3) {
+      const roofRoom = this.box(building, width * 0.48, 0.38, depth * 0.5, this.theme.roof[1], width * 0.18, height + 0.37, -depth * 0.12, mat(this.color(this.theme.house), 0.8));
+      roofRoom.castShadow = true;
+      this.box(building, width * 0.58, 0.1, depth * 0.62, this.theme.roof[0], width * 0.18, height + 0.61, -depth * 0.12);
+    }
     const windowRows = Math.max(1, floors - (era < 3 ? 0 : 1));
     this.addWindows(building, width, depth, height, windowRows, era >= 3 ? 3 : 2);
     this.box(building, 0.19, 0.38, 0.045, 0x624737, 0, 0.35, depth / 2 + 0.026);
 
-    if (era < 4 && style < 0.66) {
+    if (era < 4 && variant !== 1) {
       const roofColor = this.color(this.theme.roof);
-      const roofHeight = 0.52;
-      const roof = new Mesh(new ConeGeometry(Math.max(width, depth) * 0.79, roofHeight, 4), mat(roofColor));
-      roof.rotation.y = Math.PI / 4;
-      roof.position.y = height + 0.16 + roofHeight / 2;
-      roof.castShadow = true;
-      building.add(roof);
-      if (this.random() > 0.42) {
-        const chimney = this.box(building, 0.1, 0.24, 0.1, this.color(this.theme.roof), width * 0.22, height + 0.35, -depth * 0.12);
-        chimney.castShadow = true;
+      if (variant === 0) {
+        const pitch = this.themeId === "norse" ? 0.68 : this.themeId === "japan" ? 0.38 : 0.52;
+        for (const side of [-1, 1]) {
+          const slope = this.box(building, width * 0.76, 0.11, depth * (this.themeId === "japan" ? 1.22 : 1.04), roofColor, side * width * 0.2, height + 0.35, 0);
+          slope.rotation.z = side * pitch;
+        }
+        this.box(building, 0.08, 0.1, depth * 1.06, roofColor, 0, height + 0.65, 0);
+      } else if (variant === 2) {
+        const roofHeight = 0.5;
+        const roof = new Mesh(new ConeGeometry(Math.max(width, depth) * 0.76, roofHeight, this.themeId === "japan" ? 5 : 4), mat(roofColor));
+        roof.rotation.y = Math.PI / 4;
+        roof.position.y = height + 0.16 + roofHeight / 2;
+        roof.castShadow = true;
+        building.add(roof);
+      } else {
+        const parapet = mat(this.theme.stone, 0.82);
+        for (const [x, z, w, d] of [[0, depth / 2, width + 0.05, 0.08], [0, -depth / 2, width + 0.05, 0.08], [width / 2, 0, 0.08, depth], [-width / 2, 0, 0.08, depth]] as const) {
+          this.box(building, w, 0.18, d, this.theme.stone, x, height + 0.24, z, parapet);
+        }
+        if (this.themeId === "egypt") {
+          for (const x of [-width * 0.38, 0, width * 0.38]) this.box(building, 0.09, 0.12, 0.09, this.theme.accent, x, height + 0.39, depth / 2, mat(this.theme.accent, 0.7));
+        }
       }
     } else {
       const capColor = this.themeId === "japan" ? 0x45434a : this.themeId === "egypt" ? 0xa88b5d : 0x384a4b;
@@ -761,7 +803,7 @@ export class ChatCity {
           this.box(building, width * 0.82, 0.035, 0.035, 0x303d41, 0, y + 0.08, depth / 2 + 0.14);
         }
       }
-      if (style > 0.84) {
+      if (variant === 1 || variant === 3) {
         const rooftop = new Mesh(new CylinderGeometry(0.12, 0.18, 0.2, 8), mat(this.color(this.theme.roof)));
         rooftop.position.y = height + 0.32;
         building.add(rooftop);
@@ -777,6 +819,7 @@ export class ChatCity {
   }
 
   private makeAncientHut(building: Group, includeHearth = false) {
+    const hutStyle = Math.floor(this.random() * 4);
     const woodColor = this.themeId === "norse" ? 0x493525 : this.themeId === "japan" ? 0x573c30 : 0x745133;
     const wood = mat(woodColor, 1);
     const wallColor = this.color(this.theme.house);
@@ -830,6 +873,22 @@ export class ChatCity {
       }
       const door = this.box(building, 0.21, 0.42, 0.055, 0, 0, 0.35, 0.47, wood);
       door.rotation.y = 0.08;
+    }
+
+    if (hutStyle === 1) {
+      const storehouse = this.box(building, 0.34, 0.42, 0.38, 0, -0.38, 0.39, -0.3, mat(wallColor, 1));
+      storehouse.castShadow = true;
+      this.box(building, 0.4, 0.1, 0.46, 0, -0.38, 0.67, -0.3, mat(roofColor, 1));
+      this.box(building, 0.055, 0.56, 0.055, 0, -0.52, 0.39, -0.3, wood);
+    } else if (hutStyle === 2) {
+      this.box(building, 0.68, 0.08, 0.24, this.theme.stone, 0.03, 0.16, 0.56);
+      for (const x of [-0.23, 0.29]) this.box(building, 0.045, 0.4, 0.045, 0, x, 0.39, 0.63, wood);
+      this.box(building, 0.74, 0.075, 0.28, 0, 0.03, 0.62, 0.58, mat(roofColor, 0.96));
+    } else if (hutStyle === 3) {
+      const chimney = new Mesh(new CylinderGeometry(0.07, 0.09, 0.42, 6), mat(this.theme.stone, 0.96));
+      chimney.position.set(-0.26, 1.16, -0.1);
+      building.add(chimney);
+      this.box(building, 0.24, 0.07, 0.3, 0, 0.4, 0.25, -0.22, mat(0x8a744f, 1));
     }
 
     if (includeHearth) this.addCookingHearth(building, wood);
