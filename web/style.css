@@ -1,0 +1,3 @@
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #101923; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.debug { position: fixed; left: 16px; top: 16px; z-index: 2; white-space: pre; color: #d9e5de; background: #14252ddd; border: 1px solid #3d5c58; border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.6; pointer-events: none; }
