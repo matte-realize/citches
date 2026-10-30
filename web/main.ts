@@ -1,82 +1,45 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
-import type { SimEvent } from "../src/types.js";
+import { ChatCity, themeFromSearch } from "./city.js";
 import "./style.css";
 
-
-async function main() {
-const app = new Application();
-await app.init({ background: "#101923", resizeTo: window, antialias: true });
-document.querySelector<HTMLDivElement>("#app")!.appendChild(app.canvas);
-const world = new Container();
-app.stage.addChild(world);
+const host = document.querySelector<HTMLDivElement>("#app")!;
+const city = new ChatCity(host, themeFromSearch());
 const overlay = document.createElement("div");
 overlay.className = "debug";
-overlay.textContent = "Connecting to chat…";
+overlay.innerHTML = '<div class="debug-title"><span class="live-dot"></span>FANDOM CITY <span class="debug-subtitle">COMMUNITY BUILT</span></div><div class="debug-stage"></div><label class="theme-picker">CITY THEME <select aria-label="Choose civilization theme"><option value="ancient">Ancient Empire</option><option value="fantasy">Mythic Realm</option><option value="solarpunk">Solarpunk Haven</option><option value="cyberpunk">Neon Megacity</option></select></label><div class="debug-rate">Connecting…</div><div class="debug-counts"></div>';
 document.body.appendChild(overlay);
+const themePicker = overlay.querySelector<HTMLSelectElement>(".theme-picker select")!;
+themePicker.value = city.selectedThemeId;
+themePicker.addEventListener("change", () => {
+  const url = new URL(location.href);
+  url.searchParams.set("theme", themePicker.value);
+  location.assign(url);
+});
+const rate = overlay.querySelector<HTMLDivElement>(".debug-rate")!;
+const stage = overlay.querySelector<HTMLDivElement>(".debug-stage")!;
+const countsView = overlay.querySelector<HTMLDivElement>(".debug-counts")!;
+const updateStage = () => { stage.textContent = `${city.stage} · ${city.themeName} · ${city.landArea} TILE PLOT`; };
+updateStage();
 
-const GRID = 32, TILE_W = 28, TILE_H = 16;
-type Tile = { x: number; y: number; kind: "empty" | "house" | "landmark" | "fire" };
-const tiles: Tile[] = Array.from({ length: GRID * GRID }, (_, i) => ({ x: i % GRID, y: Math.floor(i / GRID), kind: "empty" }));
-const tileGraphics = new Map<Tile, Graphics>();
-function position(x: number, y: number) { return { x: (x - y) * TILE_W / 2, y: (x + y) * TILE_H / 2 }; }
-function drawTile(tile: Tile) {
-  let graphic = tileGraphics.get(tile);
-  if (!graphic) { graphic = new Graphics(); tileGraphics.set(tile, graphic); world.addChild(graphic); }
-  graphic.clear();
-  const colors = { empty: 0x263a42, house: 0x53b6a2, landmark: 0xe8bd67, fire: 0xef694b };
-  const p = position(tile.x, tile.y);
-  graphic.poly([0,-TILE_H/2,TILE_W/2,0,0,TILE_H/2,-TILE_W/2,0]).fill({ color: colors[tile.kind], alpha: tile.kind === "empty" ? 0.7 : 1 });
-  if (tile.kind === "house" || tile.kind === "landmark") {
-    const h = tile.kind === "house" ? 10 : 19;
-    graphic.poly([-6,-h,0,-h-5,6,-h,6,-2,0,2,-6,-2]).fill({ color: tile.kind === "house" ? 0x368977 : 0xc29245 });
-  }
-  if (tile.kind === "fire") graphic.circle(0, -5, 5).fill({ color: 0xffcc55 });
-  graphic.position.set(p.x, p.y);
-}
-for (const tile of tiles) drawTile(tile);
-function layout() {
-  const bounds = world.getLocalBounds();
-  const scale = Math.min((window.innerWidth - 40) / bounds.width, (window.innerHeight - 40) / bounds.height, 1.3);
-  world.scale.set(scale); world.position.set(window.innerWidth / 2 - (bounds.left + bounds.width/2)*scale, window.innerHeight / 2 - (bounds.top + bounds.height/2)*scale);
-}
-layout(); window.addEventListener("resize", layout);
-function place(kind: "house" | "landmark", count: number) {
-  for (let n = 0; n < Math.min(count, tiles.length); n++) {
-    const empty = tiles.filter(t => t.kind === "empty"); if (!empty.length) return;
-    const occupied = tiles.filter(t => t.kind === "house" || t.kind === "landmark");
-    const candidates = empty.filter(t => !occupied.length || occupied.some(o => Math.abs(o.x-t.x)+Math.abs(o.y-t.y) <= 3));
-    const target = (candidates.length ? candidates : empty)[Math.floor(Math.random() * (candidates.length || empty.length))];
-    target.kind = kind; drawTile(target);
-  }
-}
-function disaster(intensity: number) {
-  const targets = tiles.filter(t => t.kind === "house" || t.kind === "landmark");
-  const count = Math.min(targets.length, Math.max(1, Math.ceil(intensity * 2)));
-  for (const tile of targets.sort(() => Math.random() - 0.5).slice(0, count)) {
-    tile.kind = "fire"; drawTile(tile);
-    setTimeout(() => { tile.kind = "empty"; drawTile(tile); }, 1800);
-  }
-}
-function applyEvent(event: SimEvent) {
-  if (event.type === "build") place(event.kind, event.count);
-  if (event.type === "boom") place("house", Math.min(20, Math.ceil(event.viewers / 5)));
-  if (event.type === "disaster") disaster(event.intensity);
-  if (event.type === "effect") {
-    const old = overlay.style.boxShadow; overlay.style.boxShadow = `0 0 ${Math.min(40,event.intensity*4)}px #f7c65c`;
-    setTimeout(() => overlay.style.boxShadow = old, 500);
-  }
-}
-const host = location.hostname || "localhost";
-const socket = new WebSocket(`ws://${host}:8787`);
-socket.onopen = () => overlay.textContent = "Connected; waiting for chat…";
+const hostName = location.hostname || "localhost";
+const wsPortParam = Number(new URLSearchParams(location.search).get("wsPort") ?? 8787);
+const wsPort = Number.isFinite(wsPortParam) && wsPortParam > 0 ? wsPortParam : 8787;
+const socketProtocol = location.protocol === "https:" ? "wss" : "ws";
+const socket = new WebSocket(`${socketProtocol}://${hostName}:${wsPort}`);
+socket.onopen = () => { rate.textContent = "Connected · waiting for chat"; };
 socket.onmessage = message => {
   const data = JSON.parse(message.data);
   if (data.type !== "tick") return;
-  const { counts, messagesPerSecond } = data.aggregate;
-  overlay.textContent = `Chat City · ${messagesPerSecond.toFixed(1)} msg/s\nRAID ${counts.RAID}  SPAM ${counts.SPAM}  QUESTION ${counts.QUESTION}  HATE ${counts.HATE}  COMMENT ${counts.COMMENT}`;
-  for (const event of data.events as SimEvent[]) applyEvent(event);
+  const { counts, messagesPerSecond, supportPoints = 0 } = data.aggregate;
+  rate.textContent = `${messagesPerSecond.toFixed(1)} messages / sec`;
+  countsView.innerHTML = `
+    <span><i class="swatch comment"></i>BUILDERS <b>${counts.COMMENT}</b></span>
+    <span><i class="swatch question"></i>IDEAS <b>${counts.QUESTION}</b></span>
+    <span><i class="swatch support"></i>FAN SUPPORT <b>${supportPoints.toFixed(1)}</b></span>
+    <span><i class="swatch spam"></i>SPAM <b>${counts.SPAM}</b></span>
+    <span><i class="swatch raid"></i>RAIDS <b>${counts.RAID}</b></span>
+    <span><i class="swatch hate"></i>HATE <b>${counts.HATE}</b></span>`;
+  for (const event of data.events) city.apply(event, Boolean(data.replay));
+  updateStage();
 };
-socket.onclose = () => overlay.textContent = "Disconnected from backend";
-}
-
-void main();
+socket.onclose = () => { rate.textContent = "Backend disconnected"; };
+window.addEventListener("beforeunload", () => { socket.close(); city.destroy(); });
