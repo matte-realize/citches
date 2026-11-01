@@ -36,7 +36,14 @@ export const config = {
      * Destruction mirrors construction: minus points fill the danger meter, and each time it
      * fills a building is knocked down, in paced pulses just like build pulses.
      */
-    destroyThreshold: 4.5, maxDestroysPerPulse: 3, cooldownMs: 3200,
+    /**
+     * Adaptive threshold: knocking a building down costs `adaptiveShare` of the community's plus
+     * points from the last minute, clamped to [minThreshold, maxThreshold]. Big fast chats need
+     * more negativity to do damage; small friendly ones feel a few trolls. `destroyThreshold` is
+     * the starting value before there is any history.
+     */
+    destroyThreshold: 4.5, minThreshold: 2.5, maxThreshold: 14, adaptiveShare: 0.1, rateWindowSeconds: 90,
+    maxDestroysPerPulse: 5, cooldownMs: 180_000,
     decayPerSecond: 0.06, positiveDefense: 0.18,
     /** Danger above this many pulses' worth is dropped, so a burst of trolls cannot snowball. */
     backlogPulses: 1.5,
@@ -50,6 +57,13 @@ export const config = {
     technologyPenalty: 0.35
   },
   /** What counts as spam. Short emote reactions and stretched words ("noooo") are normal chat. */
+  /** What `npm run calibrate` checks the danger system against, using real chat logs. */
+  calibration: {
+    lostPerBuilt: [0.03, 0.3] as [number, number],     // losses are noticeable but never outpace growth
+    minutesBetweenAttacks: [3, 8] as [number, number],  // an attack is an event, not background noise
+    lostPerAttack: [1, 4] as [number, number],          // average buildings taken per attack
+    maxLostPerMinute: 6                                   // worst minute, outside of hate events
+  },
   spam: { emoteRatio: 0.8, emoteWallMinimum: 6, repeatedCharacterLength: 14, repeatedWordMinimum: 6 },
   events: {
     rateReference: 4, countMultiplier: 1, intensityMultiplier: 1,

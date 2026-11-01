@@ -38,7 +38,7 @@ export async function run(source: MessageSource) {
   publisher?.start();
   const eventMapper = new EventMapper();
   const aggregator = new Aggregator((aggregate: Aggregate, deltaCounts, deltaRaidViewers, growthSignals) => {
-    const events = eventMapper.map(aggregate, deltaCounts, deltaRaidViewers, growthSignals);
+    const events = eventMapper.map(aggregate, deltaCounts, deltaRaidViewers, growthSignals, aggregate.timestamp);
     const score = eventMapper.score;
     if (events.length || score.pops.length) console.log(`score ${score.total.toFixed(1)} threat ${(score.threatRatio * 100).toFixed(0)}%`, score.pops.map(pop => `${pop.points > 0 ? "+" : ""}${pop.points} ${pop.label}`).join(" "));
     for (const event of events) console.log("sim event", JSON.stringify(event));

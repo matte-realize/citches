@@ -2,6 +2,9 @@ import { config } from "../config.js";
 import type { GrowthSignals } from "../aggregate/aggregator.js";
 import type { Aggregate, AttackKind, CommunityProgress, Counts, ScoreSnapshot, SimEvent } from "../types.js";
 
+/** The danger meter is full when about this many buildings' worth of trouble has built up. */
+const METER_PULSES = 3;
+
 /** Which attack each flavour of negativity summons. */
 const ATTACK_FOR_RULE: Record<string, AttackKind[]> = {
   hate: ["meteor", "fire"], toxic: ["meteor", "fire"], shouting: ["storm"],
@@ -19,7 +22,7 @@ export interface MapperState {
 }
 
 export class EventMapper {
-  private readonly sessionStartedAt = Date.now();
+  private sessionStartedAt?: number;
   private houseProgress = 0;
   private landmarkProgress = 0;
   private technologyProgress = 0;
@@ -36,10 +39,15 @@ export class EventMapper {
   private recentMessages = 0;
   private recentMinusMessages = 0;
   private peakThreatRatio = 0;
+  private plusRate = 0; // exponentially weighted plus points per minute
+  private threshold = config.threat.destroyThreshold;
+
+  /** Current minus points needed to knock one building down. */
+  get destroyThreshold() { return this.threshold; }
   /** Points per chatter since the last build (credited on it) and across the whole session. */
   private contributors = new Map<string, number>();
   private leaderboard = new Map<string, number>();
-  private lastTickAt = Date.now();
+  private lastTickAt?: number;
   private negativeMix: Record<string, number> = {};
   private snapshot: ScoreSnapshot = { total: 0, gained: 0, lost: 0, threat: 0, threatRatio: 0, pops: [] };
 
@@ -89,18 +97,19 @@ export class EventMapper {
     };
   }
 
-  map(aggregate: Aggregate, delta: Counts, deltaRaidViewers: number, signals: GrowthSignals): SimEvent[] {
+  /** `now` defaults to the clock; the calibration harness passes message time so hours replay in seconds. */
+  map(aggregate: Aggregate, delta: Counts, deltaRaidViewers: number, signals: GrowthSignals, now = Date.now()): SimEvent[] {
     const rateScale = Math.max(1, aggregate.messagesPerSecond / config.events.rateReference);
     const events: SimEvent[] = [];
     const growth = config.growth;
-    const now = Date.now();
-    const seconds = Math.min(5, (now - this.lastTickAt) / 1000);
+    this.sessionStartedAt ??= now;
+    const seconds = Math.min(5, (now - (this.lastTickAt ?? now)) / 1000);
     this.lastTickAt = now;
     const eligible = signals.eligibleMessages;
     if (eligible > 0) {
       const averageComplexity = signals.complexityTotal / eligible;
       const positiveRatio = signals.positiveMessages / eligible;
-      const minutesLive = (Date.now() - this.sessionStartedAt) / 60_000;
+      const minutesLive = (now - this.sessionStartedAt) / 60_000;
       const longevity = 1 + growth.longevityMultiplier * Math.min(1, minutesLive / growth.longevityMinutes);
       const chatPace = Math.min(1.35, 0.85 + aggregate.messagesPerSecond / config.events.rateReference * 0.08);
       const pointsPerMessage = (growth.basePoints + averageComplexity * growth.complexityMultiplier + positiveRatio * growth.positivityMultiplier) * longevity * chatPace;
@@ -203,17 +212,23 @@ export class EventMapper {
     const minusShare = this.recentMessages > 0 ? this.recentMinusMessages / this.recentMessages : 0;
     const amplified = signals.minusPoints * (1 + threat.rarityBoost * (1 - Math.min(1, minusShare)));
     const byLabel = { ...signals.byLabel };
+    if (seconds > 0) {
+      const keepRate = Math.exp(-seconds / threat.rateWindowSeconds);
+      this.plusRate = this.plusRate * keepRate + (signals.plusPoints / seconds) * 60 * (1 - keepRate);
+      const target = this.plusRate * threat.adaptiveShare;
+      this.threshold = Math.min(threat.maxThreshold, Math.max(threat.minThreshold, target || threat.destroyThreshold));
+    }
     const before = this.threat;
     this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - amplified);
     let washBonus = 0;
-    this.peakThreatRatio = Math.max(this.peakThreatRatio, this.threat / threat.destroyThreshold);
+    this.peakThreatRatio = Math.max(this.peakThreatRatio, this.threat / (this.threshold * METER_PULSES));
     if (before > 0 && this.threat === 0) {
       if (this.peakThreatRatio >= threat.washOutFrom) { washBonus = threat.washOutBonus; byLabel["HATERS WASHED OUT"] = washBonus; }
       this.peakThreatRatio = 0;
     }
     // The rarity boost sharpens the danger meter; the score itself counts points at face value.
     this.scoreTotal += signals.plusPoints + signals.minusPoints + washBonus;
-    this.threat = Math.min(this.threat, threat.destroyThreshold * threat.maxDestroysPerPulse * threat.backlogPulses);
+    this.threat = Math.min(this.threat, this.threshold * threat.maxDestroysPerPulse * threat.backlogPulses);
     const fade = Math.exp(-seconds / 20);
     for (const rule of Object.keys(this.negativeMix)) this.negativeMix[rule] *= fade;
     for (const [rule, points] of Object.entries(signals.byRule)) if (points < 0) this.negativeMix[rule] = (this.negativeMix[rule] ?? 0) - points;
@@ -227,7 +242,7 @@ export class EventMapper {
       gained: Math.round((signals.plusPoints + washBonus) * 10) / 10,
       lost: Math.round(signals.minusPoints * 10) / 10,
       threat: Math.round(this.threat * 10) / 10,
-      threatRatio: Math.min(1, this.threat / threat.destroyThreshold),
+      threatRatio: Math.min(1, this.threat / (this.threshold * METER_PULSES)),
       pops,
       topBuilders: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, points]) => ({ name, points: Math.round(points) })),
       highlight: signals.highlight ? { user: signals.highlight.user, text: signals.highlight.text } : undefined
@@ -237,9 +252,9 @@ export class EventMapper {
   /** A destruction pulse, paced like build pulses: one or two buildings each time the meter fills. */
   private maybeAttack(now: number): SimEvent | undefined {
     const threat = config.threat;
-    if (this.threat < threat.destroyThreshold || now - this.lastAttackAt < threat.cooldownMs) return undefined;
-    const count = Math.min(threat.maxDestroysPerPulse, Math.floor(this.threat / threat.destroyThreshold));
-    this.threat -= count * threat.destroyThreshold;
+    if (this.threat < this.threshold || now - this.lastAttackAt < threat.cooldownMs) return undefined;
+    const count = Math.min(threat.maxDestroysPerPulse, Math.floor(this.threat / this.threshold));
+    this.threat -= count * this.threshold;
     this.lastAttackAt = now;
     const [rule] = Object.entries(this.negativeMix).sort((a, b) => b[1] - a[1])[0] ?? ["toxic"];
     // The attack matches its cause and scales with the damage: spam is always a swarm and caps
@@ -247,7 +262,7 @@ export class EventMapper {
     const flavour = ATTACK_FOR_RULE[rule] ?? ["fire"];
     const toxic = rule === "toxic" || rule === "hate" || rule === "lowEffort";
     const kind: AttackKind = rule === "hate" || (toxic && count >= 3) ? "meteor" : toxic ? "fire" : flavour[Math.floor(Math.random() * flavour.length)];
-    this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / threat.destroyThreshold) };
+    this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / (this.threshold * METER_PULSES)) };
     return {
       type: "disaster", kind, intensity: count, damageCount: count,
       durationMs: config.events.burnDurationMs,

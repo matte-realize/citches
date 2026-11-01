@@ -29,15 +29,20 @@ export class Aggregator {
     private windowMs = config.aggregateWindowMs,
     private tickMs = config.aggregateTickMs
   ) {}
-  add(message: ChatMessage) {
+  /** `receivedAt` defaults to now; the calibration harness passes each message's own timestamp. */
+  add(message: ChatMessage, receivedAt = Date.now()) {
     const category = classify(message);
     const signal = analyzeMessage(message, category);
-    this.messages.push({ message, receivedAt: Date.now(), category, signal });
+    this.messages.push({ message, receivedAt, category, signal });
     this.pending.push({ message, category, signal, hits: scoreMessage(message, category, signal, this.scoreContext) });
   }
   start() {
-    this.timer = setInterval(() => {
-      const now = Date.now();
+    this.timer = setInterval(() => this.flush(), this.tickMs);
+  }
+
+  /** Close the current tick. Live mode calls this on a timer; the harness calls it on message time. */
+  flush(now = Date.now()) {
+    {
       const cutoff = now - this.windowMs;
       const recent = this.messages.filter(item => item.receivedAt >= cutoff);
       this.messages = this.messages.filter(item => item.receivedAt >= cutoff);
@@ -76,7 +81,7 @@ export class Aggregator {
       }
       this.pending = [];
       this.tick({ timestamp: now, counts, messagesPerSecond: recent.length / (this.windowMs / 1000), raidViewers, supportPoints }, deltaCounts, deltaRaidViewers, growthSignals);
-    }, this.tickMs);
+    }
   }
   stop() { if (this.timer) clearInterval(this.timer); }
 }

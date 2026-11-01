@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { normalizeTwitchMessage, type NormalizeOverrides } from "./normalize.js";
 import type { ChatMessage, MessageSource } from "../types.js";
 
-function normalize(row: any): ChatMessage {
+export function normalizeLogRow(row: any): ChatMessage {
   if (typeof row?.timestamp === "number" && typeof row?.user === "string") return {
     timestamp: row.timestamp, user: row.user, text: row.text ?? "", emotes: row.emotes ?? [],
     isRaid: Boolean(row.isRaid), raidViewerCount: Number(row.raidViewerCount ?? 0),
@@ -25,7 +25,7 @@ export class ReplaySource implements MessageSource {
     for await (const line of lines) {
       if (this.stopped || !line.trim()) continue;
       let message: ChatMessage;
-      try { message = normalize(JSON.parse(line)); } catch { console.warn("Skipping invalid JSONL row"); continue; }
+      try { message = normalizeLogRow(JSON.parse(line)); } catch { console.warn("Skipping invalid JSONL row"); continue; }
       firstTimestamp ??= message.timestamp;
       const target = startedAt + Math.max(0, message.timestamp - firstTimestamp) / this.speed;
       const delay = target - Date.now();
