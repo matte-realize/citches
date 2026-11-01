@@ -1,0 +1,117 @@
+import { BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, SphereGeometry } from "three";
+import type { BufferGeometry as Geometry, ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
+
+/** Shared materials and geometry are flagged so disposal of one building never breaks another. */
+const materialCache = new Map<string, MeshStandardMaterial>();
+const geometryCache = new Map<string, Geometry>();
+
+export function sharedMat(color: ColorRepresentation, roughness = 0.88, extra: Partial<MeshStandardMaterialParameters> = {}) {
+  const hex = new Color(color).getHex();
+  const key = `${hex}|${roughness}|${JSON.stringify(extra)}`;
+  let material = materialCache.get(key);
+  if (!material) {
+    material = new MeshStandardMaterial({ color: hex, roughness, ...extra });
+    material.userData.shared = true;
+    materialCache.set(key, material);
+  }
+  return material;
+}
+
+function cachedGeometry(key: string, make: () => Geometry) {
+  let geometry = geometryCache.get(key);
+  if (!geometry) {
+    geometry = make();
+    geometry.userData.shared = true;
+    geometryCache.set(key, geometry);
+  }
+  return geometry;
+}
+
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+export const unitBox = () => cachedGeometry("box", () => new BoxGeometry(1, 1, 1));
+export const cylinderGeo = (top: number, bottom: number, height: number, segments = 8) =>
+  cachedGeometry(`cyl|${r3(top)}|${r3(bottom)}|${r3(height)}|${segments}`, () => new CylinderGeometry(top, bottom, height, segments));
+export const sphereGeo = (radius: number, ws = 8, hs = 6) => cachedGeometry(`sph|${r3(radius)}|${ws}|${hs}`, () => new SphereGeometry(radius, ws, hs));
+export const coneGeo = (radius: number, height: number, segments = 8) => cachedGeometry(`cone|${r3(radius)}|${r3(height)}|${segments}`, () => new ConeGeometry(radius, height, segments));
+/** Unit pyramid with a 1x1 square base resting on y=0, apex at y=1. */
+export const pyramidGeo = () => cachedGeometry("pyramid", () => {
+  const geometry = new ConeGeometry(Math.SQRT1_2, 1, 4);
+  geometry.rotateY(Math.PI / 4);
+  geometry.translate(0, 0.5, 0);
+  return geometry;
+});
+/** Unit triangular prism: base x -0.5..0.5 on y=0, ridge at y=1 running along z -0.5..0.5. */
+export const prismGeo = () => cachedGeometry("prism", () => {
+  const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0, 1, -0.5];
+  const A2 = [-0.5, 0, 0.5], B2 = [0.5, 0, 0.5], C2 = [0, 1, 0.5];
+  const faces = [A2, B2, C2, B, A, C, A, A2, C2, A, C2, C, B, C2, B2, B, C, C2, A, B, B2, A, B2, A2];
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(faces.flat(), 3));
+  geometry.computeVertexNormals();
+  return geometry;
+});
+
+export function place(parent: Object3D, geometry: Geometry, material: Material, x: number, y: number, z: number, shadow = true) {
+  const mesh = new Mesh(geometry, material);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = shadow;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+/** Box centred at (x, y, z). Uses one shared unit cube scaled per mesh. */
+export function block(parent: Object3D, w: number, h: number, d: number, x: number, y: number, z: number, material: Material, rotY = 0, shadow = true) {
+  const mesh = place(parent, unitBox(), material, x, y, z, shadow);
+  mesh.scale.set(w, h, d);
+  mesh.rotation.y = rotY;
+  return mesh;
+}
+
+/** Collects many identical small parts (windows, cobbles, lamps) into instanced draws. */
+export class Batcher {
+  private batches = new Map<string, { geometry: Geometry; material: Material; matrices: Matrix4[]; shadow: boolean }>();
+  private dummy = new Object3D();
+  add(geometry: Geometry, material: Material, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1, rotY = 0, shadow = false) {
+    const key = `${geometry.uuid}|${material.uuid}|${shadow}`;
+    let batch = this.batches.get(key);
+    if (!batch) { batch = { geometry, material, matrices: [], shadow }; this.batches.set(key, batch); }
+    this.dummy.position.set(x, y, z);
+    this.dummy.rotation.set(0, rotY, 0);
+    this.dummy.scale.set(sx, sy, sz);
+    this.dummy.updateMatrix();
+    batch.matrices.push(this.dummy.matrix.clone());
+  }
+  box(material: Material, w: number, h: number, d: number, x: number, y: number, z: number, rotY = 0, shadow = false) {
+    this.add(unitBox(), material, x, y, z, w, h, d, rotY, shadow);
+  }
+  flush(parent: Object3D) {
+    for (const batch of this.batches.values()) {
+      const mesh = new InstancedMesh(batch.geometry, batch.material, batch.matrices.length);
+      batch.matrices.forEach((matrix, index) => mesh.setMatrixAt(index, matrix));
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      mesh.castShadow = batch.shadow;
+      mesh.receiveShadow = true;
+      parent.add(mesh);
+    }
+    this.batches.clear();
+  }
+}
+
+export function disposeObject(root: Object3D) {
+  root.traverse(object => {
+    if (object instanceof InstancedMesh) object.dispose();
+    if (object instanceof Mesh) {
+      if (!object.geometry.userData.shared) object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) if (!material.userData.shared) material.dispose();
+    }
+  });
+}
+
+export function tint(color: number, random: () => number, hue = 0.02, light = 0.06) {
+  const result = new Color(color);
+  result.offsetHSL((random() - 0.5) * hue, (random() - 0.5) * 0.08, (random() - 0.5) * light);
+  return result.getHex();
+}

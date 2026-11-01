@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource/pixelify-sans": "^5.2.5",
+    "@fontsource/press-start-2p": "^5.2.5",
     "three": "^0.187.0",
     "tmi.js": "^1.8.5",
     "ws": "^8.18.0"

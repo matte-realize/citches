@@ -1,79 +1,69 @@
+import "@fontsource/pixelify-sans/400.css";
+import "@fontsource/pixelify-sans/700.css";
+import "@fontsource/press-start-2p/400.css";
 import { ChatCity, themeFromSearch } from "./city.js";
+import { CityHud } from "./hud.js";
+import { DemoFeed, TwitchExtensionFeed, WebSocketFeed } from "./transport.js";
+import type { CityFeed, CityTick } from "./transport.js";
 import "./style.css";
 
+const params = new URLSearchParams(location.search);
+const extension = TwitchExtensionFeed.available();
+// Overlay mode: transparent canvas, the city floats in a corner over the stream.
+const overlay = extension || params.has("overlay");
+document.documentElement.classList.toggle("overlay", overlay);
+document.documentElement.dataset.corner = params.get("corner") ?? "br";
+
 const host = document.querySelector<HTMLDivElement>("#app")!;
-const city = new ChatCity(host, themeFromSearch());
-const overlay = document.createElement("div");
-overlay.className = "debug";
-overlay.innerHTML = '<div class="debug-title"><span class="live-dot"></span>FANDOM CITY <span class="debug-subtitle">COMMUNITY BUILT</span></div><div class="debug-stage"></div><label class="theme-picker">CIVILIZATION <select aria-label="Choose civilization theme"><option value="egypt">Nile Kingdom</option><option value="rome">Roman Republic</option><option value="norse">Norse Settlement</option><option value="japan">Imperial Japan</option></select></label><div class="debug-rate">Connecting…</div><div class="debug-counts"></div>';
-document.body.appendChild(overlay);
-const progressPanel = document.createElement("section");
-progressPanel.className = "progress-panel";
-progressPanel.innerHTML = '<div class="progress-heading"><span class="progress-title">NEXT CIVILIZATION MILESTONE</span><span class="progress-value">Waiting for chat</span></div><div class="progress-track" role="progressbar" aria-label="Technology milestone progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill"></div></div><div class="progress-caption">Thoughtful chat, time, and fan support advance the city.</div><div class="recovery-meter" hidden><div class="progress-heading"><span class="recovery-title">COMMUNITY RECOVERY</span><span class="recovery-value"></span></div><div class="progress-track recovery-track" role="progressbar" aria-label="Community recovery progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill recovery-fill"></div></div><div class="recovery-caption">Homes remain modest until the community can rebuild.</div></div>';
-document.body.appendChild(progressPanel);
-const technologyTrack = progressPanel.querySelector<HTMLDivElement>(".progress-track")!;
-const technologyFill = progressPanel.querySelector<HTMLDivElement>(".progress-fill")!;
-const technologyValue = progressPanel.querySelector<HTMLSpanElement>(".progress-value")!;
-const technologyCaption = progressPanel.querySelector<HTMLDivElement>(".progress-caption")!;
-const recoveryMeter = progressPanel.querySelector<HTMLDivElement>(".recovery-meter")!;
-const recoveryTrack = progressPanel.querySelector<HTMLDivElement>(".recovery-track")!;
-const recoveryFill = progressPanel.querySelector<HTMLDivElement>(".recovery-fill")!;
-const recoveryValue = progressPanel.querySelector<HTMLSpanElement>(".recovery-value")!;
-const recoveryCaption = progressPanel.querySelector<HTMLDivElement>(".recovery-caption")!;
-const themePicker = overlay.querySelector<HTMLSelectElement>(".theme-picker select")!;
-themePicker.value = city.selectedThemeId;
-themePicker.addEventListener("change", () => {
-  const url = new URL(location.href);
-  url.searchParams.set("theme", themePicker.value);
-  location.assign(url);
-});
-const rate = overlay.querySelector<HTMLDivElement>(".debug-rate")!;
-const stage = overlay.querySelector<HTMLDivElement>(".debug-stage")!;
-const countsView = overlay.querySelector<HTMLDivElement>(".debug-counts")!;
-const updateStage = () => { stage.textContent = `${city.stage} · ${city.themeName} · ${city.landArea} TILE PLOT`; };
+const city = new ChatCity(host, themeFromSearch(), { transparent: overlay, zoom: Number(params.get("zoom")) || (overlay ? 1.25 : 1) });
+const hud = new CityHud({ overlay, screenPoint: () => city.screenPoint(city.focus) });
+
+const status = document.createElement("div");
+status.className = "status-chip";
+document.body.appendChild(status);
+
+if (!overlay) {
+  const panel = document.createElement("div");
+  panel.className = "debug";
+  panel.innerHTML = '<div class="debug-title"><span class="live-dot"></span>CHAT CITY</div><div class="debug-stage"></div><label class="theme-picker">CIV <select aria-label="Choose civilization theme"><option value="egypt">Nile Kingdom</option><option value="rome">Roman Republic</option><option value="norse">Norse Settlement</option><option value="japan">Imperial Japan</option></select></label><div class="debug-rate">…</div><div class="debug-counts"></div>';
+  document.body.appendChild(panel);
+  const picker = panel.querySelector<HTMLSelectElement>("select")!;
+  picker.value = city.selectedThemeId;
+  picker.addEventListener("change", () => {
+    const url = new URL(location.href);
+    url.searchParams.set("theme", picker.value);
+    location.assign(url);
+  });
+}
+const stage = document.querySelector<HTMLDivElement>(".debug-stage");
+const rate = document.querySelector<HTMLDivElement>(".debug-rate");
+const counts = document.querySelector<HTMLDivElement>(".debug-counts");
+const updateStage = () => { if (stage) stage.textContent = `${city.stage} · ${city.themeName} · ${city.landArea} TILES`; };
 updateStage();
 
-const hostName = location.hostname || "localhost";
-const wsPortParam = Number(new URLSearchParams(location.search).get("wsPort") ?? 8787);
-const wsPort = Number.isFinite(wsPortParam) && wsPortParam > 0 ? wsPortParam : 8787;
-const socketProtocol = location.protocol === "https:" ? "wss" : "ws";
-const socket = new WebSocket(`${socketProtocol}://${hostName}:${wsPort}`);
-socket.onopen = () => { rate.textContent = "Connected · waiting for chat"; };
-socket.onmessage = message => {
-  const data = JSON.parse(message.data);
-  if (data.type !== "tick") return;
-  if (data.progress) {
-    const tech = data.progress.technology;
-    const techPercent = Math.max(0, Math.min(100, Math.round(tech.ratio * 100)));
-    technologyFill.style.width = `${techPercent}%`;
-    technologyTrack.setAttribute("aria-valuenow", String(techPercent));
-    technologyValue.textContent = tech.ratio >= 1 ? "EMPIRE COMPLETE" : `${tech.current.toFixed(1)} / ${tech.goal.toFixed(1)} pts`;
-    progressPanel.querySelector<HTMLSpanElement>(".progress-title")!.textContent = tech.ratio >= 1 ? "CIVILIZATION PROGRESS" : `NEXT: ${tech.name}`;
-    technologyCaption.textContent = tech.ratio >= 1
-      ? "All civilization milestones reached. Your empire is complete."
-      : `${techPercent}% complete · Community points earned toward this milestone`;
-    const recovery = data.progress.recovery;
-    city.setCommunityProgress(recovery);
-    recoveryMeter.hidden = !recovery.active;
-    if (recovery.active) {
-      const recoveryPercent = Math.max(0, Math.min(100, Math.round(recovery.ratio * 100)));
-      recoveryFill.style.width = `${recoveryPercent}%`;
-      recoveryTrack.setAttribute("aria-valuenow", String(recoveryPercent));
-      recoveryValue.textContent = `${recoveryPercent}%`;
-      recoveryCaption.textContent = `${recovery.current.toFixed(0)} / ${recovery.goal.toFixed(0)} recovery points · rebuilding at ${["camp", "hut", "home", "stone city", "industrial", "airship", "empire"][recovery.era]} level`;
-    }
+const onTick = (tick: CityTick) => {
+  const replay = Boolean(tick.replay);
+  if (tick.progress) {
+    hud.setProgress(tick.progress);
+    city.setCommunityProgress(tick.progress.recovery);
   }
-  const { counts, messagesPerSecond, supportPoints = 0 } = data.aggregate;
-  rate.textContent = `${messagesPerSecond.toFixed(1)} messages / sec`;
-  countsView.innerHTML = `
-    <span><i class="swatch comment"></i>BUILDERS <b>${counts.COMMENT}</b></span>
-    <span><i class="swatch question"></i>IDEAS <b>${counts.QUESTION}</b></span>
-    <span><i class="swatch support"></i>FAN SUPPORT <b>${supportPoints.toFixed(1)}</b></span>
-    <span><i class="swatch spam"></i>SPAM <b>${counts.SPAM}</b></span>
-    <span><i class="swatch raid"></i>RAIDS <b>${counts.RAID}</b></span>
-    <span><i class="swatch hate"></i>HATE <b>${counts.HATE}</b></span>`;
-  for (const event of data.events) city.apply(event, Boolean(data.replay));
+  if (tick.score) hud.setScore(tick.score, replay);
+  for (const event of tick.events) {
+    city.apply(event, replay);
+    if (!replay) hud.event(event);
+  }
+  if (tick.aggregate && rate && counts) {
+    const c = tick.aggregate.counts;
+    rate.textContent = `${tick.aggregate.messagesPerSecond.toFixed(1)} MSG/SEC`;
+    counts.innerHTML = `<span>CHAT <b>${c.COMMENT}</b></span><span>IDEAS <b>${c.QUESTION}</b></span><span>SPAM <b>${c.SPAM}</b></span><span>RAIDS <b>${c.RAID}</b></span>`;
+  }
   updateStage();
 };
-socket.onclose = () => { rate.textContent = "Backend disconnected"; };
-window.addEventListener("beforeunload", () => { socket.close(); city.destroy(); });
+
+const wsPortParam = Number(params.get("wsPort") ?? 8787);
+const wsPort = Number.isFinite(wsPortParam) && wsPortParam > 0 ? wsPortParam : 8787;
+const feed: CityFeed = extension ? new TwitchExtensionFeed(params.get("ebs") ?? undefined)
+  : params.has("demo") ? new DemoFeed(Number(params.get("demo")) || 1)
+  : new WebSocketFeed(`${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}:${wsPort}`);
+feed.start(onTick, text => { status.textContent = text; });
+window.addEventListener("beforeunload", () => { feed.stop(); city.destroy(); });

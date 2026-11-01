@@ -1,6 +1,15 @@
 import { config } from "../config.js";
 import type { GrowthSignals } from "../aggregate/aggregator.js";
-import type { Aggregate, CommunityProgress, Counts, SimEvent } from "../types.js";
+import type { Aggregate, AttackKind, CommunityProgress, Counts, ScoreSnapshot, SimEvent } from "../types.js";
+
+/** Which attack each flavour of negativity summons. */
+const ATTACK_FOR_RULE: Record<string, AttackKind[]> = {
+  hate: ["meteor", "fire"], toxic: ["meteor", "fire"], shouting: ["storm"],
+  spam: ["swarm"], copypasta: ["swarm"], flood: ["swarm", "storm"], lowEffort: ["fire"]
+};
+const ATTACK_REASON: Record<string, string> = {
+  hate: "HATE", toxic: "TOXIC CHAT", shouting: "ALL CAPS STORM", spam: "SPAM SWARM", copypasta: "COPYPASTA SWARM", flood: "CHAT FLOOD", lowEffort: "LOW EFFORT"
+};
 
 export class EventMapper {
   private readonly sessionStartedAt = Date.now();
@@ -13,6 +22,14 @@ export class EventMapper {
   private recoveryProgress = 0;
   private recoveryGoal = 0;
   private lastBuildAt = 0;
+  private scoreTotal = 0;
+  private threat = 0;
+  private lastAttackAt = 0;
+  private lastTickAt = Date.now();
+  private negativeMix: Record<string, number> = {};
+  private snapshot: ScoreSnapshot = { total: 0, gained: 0, lost: 0, threat: 0, threatRatio: 0, pops: [] };
+
+  get score(): ScoreSnapshot { return this.snapshot; }
 
   get progress(): CommunityProgress {
     const milestones = config.technology.milestones;
@@ -42,6 +59,9 @@ export class EventMapper {
     const rateScale = Math.max(1, aggregate.messagesPerSecond / config.events.rateReference);
     const events: SimEvent[] = [];
     const growth = config.growth;
+    const now = Date.now();
+    const seconds = Math.min(5, (now - this.lastTickAt) / 1000);
+    this.lastTickAt = now;
     const eligible = signals.eligibleMessages;
     if (eligible > 0) {
       const averageComplexity = signals.complexityTotal / eligible;
@@ -74,6 +94,11 @@ export class EventMapper {
       }
     }
 
+    // Minuses slow technology down, but never undo a milestone that was already reached.
+    const eraFloor = this.technologyEra > 0 ? config.technology.milestones[this.technologyEra - 1].points : 0;
+    this.technologyProgress = Math.max(eraFloor, this.technologyProgress + signals.minusPoints * config.threat.technologyPenalty);
+    this.updateScore(signals, seconds);
+
     while (this.technologyEra < config.technology.milestones.length
       && this.technologyProgress >= config.technology.milestones[this.technologyEra].points) {
       const milestone = config.technology.milestones[this.technologyEra];
@@ -81,7 +106,6 @@ export class EventMapper {
       events.push({ type: "advancement", era: this.technologyEra, name: milestone.name });
     }
 
-    const now = Date.now();
     if (now - this.lastBuildAt >= growth.buildCooldownMs) {
       if (this.landmarkProgress >= growth.landmarkThreshold) {
         const count = Math.min(growth.maxBuildsPerPulse, Math.floor(this.landmarkProgress / growth.landmarkThreshold));
@@ -97,7 +121,9 @@ export class EventMapper {
     }
 
     const intensity = (count: number) => Math.min(10, count * config.events.intensityMultiplier * rateScale);
-    if (delta.SPAM >= config.events.fireworksThreshold) events.push({ type: "effect", kind: "fireworks", intensity: intensity(delta.SPAM) });
+    // Celebrations come from bursts of hype and kindness, not from spam.
+    const cheer = (signals.byRule.hype ?? 0) + (signals.byRule.kindness ?? 0) + (signals.byRule.support ?? 0);
+    if (cheer >= config.events.fireworksThreshold) events.push({ type: "effect", kind: "fireworks", intensity: Math.min(10, cheer * 0.6 * rateScale) });
     if (delta.RAID && deltaRaidViewers >= config.events.raidMinimumViewers) events.push({ type: "boom", viewers: deltaRaidViewers });
     if (aggregate.counts.HATE >= config.events.disasterThreshold && delta.HATE > 0) {
       const disasterIntensity = intensity(delta.HATE);
@@ -106,11 +132,57 @@ export class EventMapper {
         kind: Math.random() < 0.5 ? "fire" : "meteor",
         intensity: disasterIntensity,
         damageCount: Math.max(1, Math.ceil(disasterIntensity * config.events.destroyedBuildingsPerIntensity)),
-        durationMs: config.events.burnDurationMs
+        durationMs: config.events.burnDurationMs,
+        reason: "HATE"
       });
       this.startRecovery(disasterIntensity);
     }
+    const attack = this.maybeAttack(now);
+    if (attack) events.push(attack);
     return events;
+  }
+
+  private updateScore(signals: GrowthSignals, seconds: number) {
+    const threat = config.threat;
+    this.scoreTotal += signals.plusPoints + signals.minusPoints;
+    this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - signals.minusPoints);
+    this.threat = Math.min(this.threat, threat.threshold * 1.5);
+    const fade = Math.exp(-seconds / 20);
+    for (const rule of Object.keys(this.negativeMix)) this.negativeMix[rule] *= fade;
+    for (const [rule, points] of Object.entries(signals.byRule)) if (points < 0) this.negativeMix[rule] = (this.negativeMix[rule] ?? 0) - points;
+    const pops = Object.entries(signals.byLabel)
+      .filter(([, points]) => Math.abs(points) >= 0.25)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+      .slice(0, 4)
+      .map(([label, points]) => ({ label, points: Math.round(points * 10) / 10 }));
+    this.snapshot = {
+      total: Math.round(this.scoreTotal * 10) / 10,
+      gained: Math.round(signals.plusPoints * 10) / 10,
+      lost: Math.round(signals.minusPoints * 10) / 10,
+      threat: Math.round(this.threat * 10) / 10,
+      threatRatio: Math.min(1, this.threat / threat.threshold),
+      pops
+    };
+  }
+
+  private maybeAttack(now: number): SimEvent | undefined {
+    const threat = config.threat;
+    if (this.threat < threat.threshold || now - this.lastAttackAt < threat.cooldownMs) return undefined;
+    const [rule] = Object.entries(this.negativeMix).sort((a, b) => b[1] - a[1])[0] ?? ["toxic"];
+    const kinds = ATTACK_FOR_RULE[rule] ?? ["fire"];
+    const kind = kinds[Math.floor(Math.random() * kinds.length)];
+    const intensity = Math.min(threat.maxIntensity, 1.5 + (this.threat / threat.threshold) * 1.5);
+    this.threat *= threat.carryOver;
+    this.lastAttackAt = now;
+    this.negativeMix = {};
+    this.startRecovery(intensity * 0.5);
+    this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / threat.threshold) };
+    return {
+      type: "disaster", kind, intensity,
+      damageCount: Math.max(1, Math.ceil(intensity * 1.2)),
+      durationMs: config.events.burnDurationMs,
+      reason: ATTACK_REASON[rule] ?? "TROUBLE"
+    };
   }
 
   private startRecovery(intensity: number) {

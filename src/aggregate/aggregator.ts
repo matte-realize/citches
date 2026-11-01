@@ -1,14 +1,23 @@
 import { config } from "../config.js";
 import { classify } from "../classify/classifier.js";
 import { analyzeMessage } from "../classify/signals.js";
+import { ScoreContext, scoreMessage } from "../score/rules.js";
+import type { ScoreHit } from "../score/rules.js";
 import type { Aggregate, Category, ChatMessage, Counts } from "../types.js";
 
 const emptyCounts = (): Counts => ({ RAID: 0, SPAM: 0, QUESTION: 0, HATE: 0, COMMENT: 0 });
-export interface GrowthSignals { eligibleMessages: number; positiveMessages: number; complexityTotal: number; supportPoints: number }
+export interface GrowthSignals {
+  eligibleMessages: number; positiveMessages: number; complexityTotal: number; supportPoints: number;
+  /** Sum of plus and minus points from the scoring rules this tick. */
+  plusPoints: number; minusPoints: number;
+  /** Points per rule id and per visible label, for attacks and overlay pops. */
+  byRule: Record<string, number>; byLabel: Record<string, number>;
+}
 export class Aggregator {
   private messages: Array<{ message: ChatMessage; receivedAt: number; category: Category; signal: ReturnType<typeof analyzeMessage> }> = [];
-  private pending: Array<{ message: ChatMessage; category: Category; signal: ReturnType<typeof analyzeMessage> }> = [];
-  private timer?: NodeJS.Timeout;
+  private pending: Array<{ message: ChatMessage; category: Category; signal: ReturnType<typeof analyzeMessage>; hits: ScoreHit[] }> = [];
+  private scoreContext = new ScoreContext();
+  private timer?: ReturnType<typeof setInterval>;
   constructor(
     private tick: (aggregate: Aggregate, deltaCounts: Counts, deltaRaidViewers: number, growthSignals: GrowthSignals) => void,
     private windowMs = config.aggregateWindowMs,
@@ -18,7 +27,7 @@ export class Aggregator {
     const category = classify(message);
     const signal = analyzeMessage(message, category);
     this.messages.push({ message, receivedAt: Date.now(), category, signal });
-    this.pending.push({ message, category, signal });
+    this.pending.push({ message, category, signal, hits: scoreMessage(message, category, signal, this.scoreContext) });
   }
   start() {
     this.timer = setInterval(() => {
@@ -35,9 +44,14 @@ export class Aggregator {
         supportPoints += signal.supportPoints;
       }
       const deltaCounts = emptyCounts();
-      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0 };
+      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, byRule: {}, byLabel: {} };
       let deltaRaidViewers = 0;
-      for (const { message, category, signal } of this.pending) {
+      for (const { message, category, signal, hits } of this.pending) {
+        for (const hit of hits) {
+          if (hit.points >= 0) growthSignals.plusPoints += hit.points; else growthSignals.minusPoints += hit.points;
+          growthSignals.byRule[hit.rule] = (growthSignals.byRule[hit.rule] ?? 0) + hit.points;
+          if (hit.label) growthSignals.byLabel[hit.label] = (growthSignals.byLabel[hit.label] ?? 0) + hit.points;
+        }
         deltaCounts[category]++;
         if (message.isRaid) deltaRaidViewers += message.raidViewerCount;
         if (signal.eligible) growthSignals.eligibleMessages++;

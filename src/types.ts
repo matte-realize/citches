@@ -20,7 +20,12 @@ export type SimEvent =
   | { type: "build"; kind: "house" | "landmark"; count: number }
   | { type: "effect"; kind: "fireworks"; intensity: number }
   | { type: "boom"; viewers: number }
-  | { type: "disaster"; kind: "fire" | "meteor"; intensity: number; damageCount?: number; durationMs?: number };
+  | { type: "disaster"; kind: AttackKind; intensity: number; damageCount?: number; durationMs?: number; reason?: string };
+
+export type AttackKind = "fire" | "meteor" | "storm" | "swarm";
+export interface ScorePop { label: string; points: number }
+/** Running city score shown in the overlay: total points, danger meter, and labelled pops for this tick. */
+export interface ScoreSnapshot { total: number; gained: number; lost: number; threat: number; threatRatio: number; pops: ScorePop[] }
 
 export interface MessageSource {
   connect(): Promise<void>;

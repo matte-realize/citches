@@ -11,6 +11,8 @@ npm run live -- <channel>
 npm run replay -- <path-to-jsonl> [speed]
 ```
 
+No backend handy? Open the web app with `?demo=1` (or `?demo=4` for 4x chat) to run the real scoring pipeline on simulated chat, including periodic troll waves that attack the city.
+
 In another terminal, run `npm run dev:web` and open the printed Vite URL. Streamers can choose a civilization theme from the on-screen selector: Nile Kingdom, Roman Republic, Norse Settlement, or Imperial Japan. Each theme changes the palette and the architecture as the settlement grows. The selection is saved in the view URL (`?theme=...`), so it can be kept as a stream layout; changing it reconnects and rebuilds the current city from the backend's recent event history. The browser connects to port `8787` by default; `?wsPort=8790` selects another local port. For the backend, configure the socket with `WS_PORT`.
 
 `AGGREGATE_WINDOW_MS` sets the rolling count window (default 5 seconds); `AGGREGATE_TICK_MS` sets the UI refresh cadence (default 250 ms). Live mode also accepts `TWITCH_CHANNEL`.
@@ -23,8 +25,28 @@ Twitch Bits/cheers, subscriptions, resubs, and gifted subscriptions add shared s
 
 The renderer begins with people gathered around one shared campfire, then grows from huts to homes and a city. Each building faces a connected pedestrian path; placement routes around occupied plots and reserves clear space for residents and livestock. The first technology milestone expands the plot, and each later milestone opens another ring. The bottom progress panel names the next milestone and shows exact community points earned against the target, alongside the percentage fill. Industrial milestones add a separate vehicle road beside the footpaths. Wagons follow established paths, cars use the later road network, and blimps arrive in the aviation era. As technology advances, the community can redevelop several older homes into a landmark or, in the industrial era and beyond, a skyscraper; redevelopment waits until a safe, accessible cluster is available. Disasters can destroy a concentrated district; rebuilding enters a temporary lower-era housing phase until positive chat and fan support refill the recovery meter. Once recovery completes, another neighborhood can be renewed at the city’s current level. Rendering stays separate from chat transport so an extension adapter can replace the local WebSocket.
 
+## Points, minuses and attacks
+
+Every message runs through a list of scoring rules (`src/score/rules.ts`). Each rule returns a hit and is weighted in `config.scoring.weights`: positive weights are pluses, negative weights are minuses. Add a new rule by appending to `SCORE_RULES` and giving it a weight.
+
+| Pluses | Minuses |
+| --- | --- |
+| HYPE (positive words), KINDNESS (thanks, respect, <3), BIG BRAIN (long, varied messages), CURIOUS (questions), SUPPORT (bits/subs), plus a small silent bonus for any real chat | TOXIC (insult/negativity list), HATE (`HATE_KEYWORDS` env, comma separated), SPAM, SHOUTING (mostly caps), COPYPASTA (the same text 3+ times in 20 s), FLOOD (one user posting 4+ times in 10 s), MEH (one-letter messages) |
+
+Points accumulate into the on-screen **CITY POINTS** counter, and each tick's biggest reasons float up from the city as `+1.4 KINDNESS` / `-1.6 COPYPASTA` pops. Minuses also fill the **DANGER** meter (`config.threat`); pluses drain it, and it decays on its own. When it fills, the city is attacked, and the dominant kind of negativity picks the attack: toxic chat calls a meteor or fire, all caps calls a lightning storm, and spam, copypasta or floods call a locust swarm that gnaws buildings down. Minuses also slightly slow technology progress, but never undo a milestone that was already reached.
+
+## Twitch extension overlay
+
+`overlay.html` is the Twitch video-overlay entry point. It loads the Twitch Extension Helper, renders with a transparent background, floats the plot as a small island in a corner of the stream, and shows the score bar in pixel type. Any page also accepts `?overlay=1` to preview overlay mode locally; `&corner=bl|br|center` moves the city and `&zoom=1.5` scales it.
+
+For the overlay to work live, the backend acts as the Extension Backend Service:
+
+- Set `TWITCH_EXT_CLIENT_ID`, `TWITCH_EXT_SECRET` (the base64 extension secret), `TWITCH_EXT_OWNER_ID`, and `TWITCH_BROADCASTER_ID`. The backend then signs extension JWTs and broadcasts batched ticks through Extension PubSub (at most one message per second, under 5 KB).
+- The backend serves `GET /snapshot` on the WebSocket port, so viewers who join late rebuild the same city. Expose it over HTTPS and put `{"ebsUrl":"https://…"}` in the extension's broadcaster configuration, or pass `?ebs=` while testing.
+- `npm run build:web` produces relative-path assets in `dist/` that can be zipped and uploaded as the extension's hosted files. Fonts are bundled locally rather than loaded from a CDN.
+
 ## Data and tuning
 
 Live messages are appended to `logs/<channel>-<UTC-date>.jsonl`. Replay accepts raw log rows and normalized `{timestamp,user,text,emotes,isRaid,raidViewerCount}` rows; replay speed `2` runs twice as fast.
 
-Rule keywords, growth and technology milestones, recovery rates, multipliers, support weights, and event thresholds are in `src/config.ts`. `ingest/`, `classify/`, `aggregate/`, and `events/` remain separate modules under `src/`. The browser receives `{type:"tick", aggregate, events, progress}`. Event shapes are in `src/types.ts`; advancement events unlock milestones while existing build and effect event shapes remain intact.
+Rule keywords, growth and technology milestones, recovery rates, multipliers, support weights, and event thresholds are in `src/config.ts`. `ingest/`, `classify/`, `aggregate/`, and `events/` remain separate modules under `src/`. The browser receives `{type:"tick", aggregate, events, progress, score}`. Event shapes are in `src/types.ts`; advancement events unlock milestones while existing build and effect event shapes remain intact.
