@@ -26,6 +26,9 @@ export class EventMapper {
   private threat = 0;
   private lastAttackAt = 0;
   private lastFireworksAt = 0;
+  private recentMessages = 0;
+  private recentMinusMessages = 0;
+  private peakThreatRatio = 0;
   private lastTickAt = Date.now();
   private negativeMix: Record<string, number> = {};
   private snapshot: ScoreSnapshot = { total: 0, gained: 0, lost: 0, threat: 0, threatRatio: 0, pops: [] };
@@ -148,20 +151,35 @@ export class EventMapper {
 
   private updateScore(signals: GrowthSignals, seconds: number) {
     const threat = config.threat;
-    this.scoreTotal += signals.plusPoints + signals.minusPoints;
-    this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - signals.minusPoints);
-    this.threat = Math.min(this.threat, threat.destroyThreshold * threat.maxDestroysPerPulse * 3);
+    // Rolling share of messages that carried a minus; rare negativity hits harder.
+    const keep = Math.exp(-seconds / threat.rarityWindowSeconds);
+    this.recentMessages = this.recentMessages * keep + signals.scoredMessages;
+    this.recentMinusMessages = this.recentMinusMessages * keep + signals.minusMessages;
+    const minusShare = this.recentMessages > 0 ? this.recentMinusMessages / this.recentMessages : 0;
+    const amplified = signals.minusPoints * (1 + threat.rarityBoost * (1 - Math.min(1, minusShare)));
+    const byLabel = { ...signals.byLabel };
+    const before = this.threat;
+    this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - amplified);
+    let washBonus = 0;
+    this.peakThreatRatio = Math.max(this.peakThreatRatio, this.threat / threat.destroyThreshold);
+    if (before > 0 && this.threat === 0) {
+      if (this.peakThreatRatio >= threat.washOutFrom) { washBonus = threat.washOutBonus; byLabel["HATERS WASHED OUT"] = washBonus; }
+      this.peakThreatRatio = 0;
+    }
+    // The rarity boost sharpens the danger meter; the score itself counts points at face value.
+    this.scoreTotal += signals.plusPoints + signals.minusPoints + washBonus;
+    this.threat = Math.min(this.threat, threat.destroyThreshold * threat.maxDestroysPerPulse * threat.backlogPulses);
     const fade = Math.exp(-seconds / 20);
     for (const rule of Object.keys(this.negativeMix)) this.negativeMix[rule] *= fade;
     for (const [rule, points] of Object.entries(signals.byRule)) if (points < 0) this.negativeMix[rule] = (this.negativeMix[rule] ?? 0) - points;
-    const pops = Object.entries(signals.byLabel)
+    const pops = Object.entries(byLabel)
       .filter(([, points]) => Math.abs(points) >= 0.25)
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
       .slice(0, 4)
       .map(([label, points]) => ({ label, points: Math.round(points * 10) / 10 }));
     this.snapshot = {
       total: Math.round(this.scoreTotal * 10) / 10,
-      gained: Math.round(signals.plusPoints * 10) / 10,
+      gained: Math.round((signals.plusPoints + washBonus) * 10) / 10,
       lost: Math.round(signals.minusPoints * 10) / 10,
       threat: Math.round(this.threat * 10) / 10,
       threatRatio: Math.min(1, this.threat / threat.destroyThreshold),
@@ -177,8 +195,11 @@ export class EventMapper {
     this.threat -= count * threat.destroyThreshold;
     this.lastAttackAt = now;
     const [rule] = Object.entries(this.negativeMix).sort((a, b) => b[1] - a[1])[0] ?? ["toxic"];
-    const kinds = ATTACK_FOR_RULE[rule] ?? ["fire"];
-    const kind = kinds[Math.floor(Math.random() * kinds.length)];
+    // The attack matches its cause and scales with the damage: spam is always a swarm and caps
+    // are always lightning, just bigger. Toxic chat starts as a fire and escalates to a meteor.
+    const flavour = ATTACK_FOR_RULE[rule] ?? ["fire"];
+    const toxic = rule === "toxic" || rule === "hate" || rule === "lowEffort";
+    const kind: AttackKind = rule === "hate" || (toxic && count >= 3) ? "meteor" : toxic ? "fire" : flavour[Math.floor(Math.random() * flavour.length)];
     this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / threat.destroyThreshold) };
     return {
       type: "disaster", kind, intensity: count, damageCount: count,

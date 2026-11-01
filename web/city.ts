@@ -1,4 +1,7 @@
-import { ACESFilmicToneMapping, Box3, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { RenderPixelatedPass } from "three/examples/jsm/postprocessing/RenderPixelatedPass.js";
+import { ACESFilmicToneMapping, BasicShadowMap, ShaderMaterial, Box3, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
@@ -18,7 +21,7 @@ type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group;
 type Particle = { position: Vector3; velocity: Vector3; size: number; color: Color; life: number; maxLife: number; gravity: number; drag?: number };
 const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
-/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 3 = chunky). */
+/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 2 = default pixel art). */
 export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number }
 
 const GRID = 32;
@@ -114,6 +117,7 @@ export class ChatCity {
   private transparent: boolean;
   private zoom: number;
   private pixelSize: number;
+  private composer?: EffectComposer;
   private cameraBase = new Vector3(35, 43, 35);
 
   constructor(private host: HTMLElement, themeId: CityThemeId = themeFromSearch(), options: CityOptions = {}) {
@@ -132,12 +136,23 @@ export class ChatCity {
       },
       cityRadius: () => this.activeRadius
     }, this.theme, themeId);
-    // Render the city at low resolution and upscale with nearest-neighbour for a true pixel-art look.
-    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 1));
-    this.renderer = new WebGLRenderer({ antialias: this.pixelSize === 1, alpha: true, premultipliedAlpha: true });
-    this.renderer.setPixelRatio(this.pixelSize === 1 ? Math.min(window.devicePixelRatio, 2) : 1 / this.pixelSize);
+    // Isometric pixel art to match the HUD: render at low resolution, outline edges, upscale crisp.
+    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 2));
+    const pixelArt = this.pixelSize > 1;
+    this.renderer = new WebGLRenderer({ antialias: !pixelArt, alpha: true, premultipliedAlpha: true });
+    this.renderer.setPixelRatio(pixelArt ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFShadowMap;
+    this.renderer.shadowMap.type = pixelArt ? BasicShadowMap : PCFShadowMap; // hard-edged pixel shadows
+    if (pixelArt) {
+      this.composer = new EffectComposer(this.renderer);
+      const pixelPass = new RenderPixelatedPass(this.pixelSize, this.scene, this.camera, { normalEdgeStrength: 0.35, depthEdgeStrength: 0.55 });
+      // Outlines darken colour only, so silhouettes stay opaque over a transparent overlay.
+      const fsQuad = (pixelPass as unknown as { _fsQuad: { material: ShaderMaterial } })._fsQuad;
+      fsQuad.material.fragmentShader = fsQuad.material.fragmentShader.replace("gl_FragColor = texel * Strength;", "gl_FragColor = vec4(texel.rgb * Strength, texel.a);");
+      fsQuad.material.needsUpdate = true;
+      this.composer.addPass(pixelPass);
+      this.composer.addPass(new OutputPass());
+    }
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.32;
@@ -251,6 +266,7 @@ export class ChatCity {
     const height = this.host.clientHeight || window.innerHeight;
     this.aspect = width / height;
     this.renderer.setSize(width, height, false);
+    this.composer?.setSize(width, height);
     this.updateCameraFrustum();
   };
 
@@ -1502,12 +1518,16 @@ export class ChatCity {
     if (this.streetsDirty) this.rebuildStreets();
     this.updateCampfire(delta);
     this.life.update(delta);
-    this.effects = this.effects.filter(effect => !effect(delta));
+    // Effects may schedule more effects (bolts, craters) while running; collect those too.
+    const running = this.effects;
+    this.effects = [];
+    const unfinished = running.filter(effect => !effect(delta));
+    this.effects.push(...unfinished);
     this.updateParticles(delta);
     this.shake = Math.max(0, this.shake - delta * 1.4);
     const jolt = this.shake * this.shake * 0.5;
     this.camera.position.set(this.cameraBase.x + (Math.random() - 0.5) * jolt, this.cameraBase.y + (Math.random() - 0.5) * jolt, this.cameraBase.z + (Math.random() - 0.5) * jolt);
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
   };
 
   /** Project a world point to CSS pixels inside the host element. */

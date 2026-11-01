@@ -10,6 +10,8 @@ export interface GrowthSignals {
   eligibleMessages: number; positiveMessages: number; complexityTotal: number; supportPoints: number;
   /** Sum of plus and minus points from the scoring rules this tick. */
   plusPoints: number; minusPoints: number;
+  /** Messages scored this tick, and how many of them carried any minus. */
+  scoredMessages: number; minusMessages: number;
   /** Points per rule id and per visible label, for attacks and overlay pops. */
   byRule: Record<string, number>; byLabel: Record<string, number>;
 }
@@ -44,9 +46,11 @@ export class Aggregator {
         supportPoints += signal.supportPoints;
       }
       const deltaCounts = emptyCounts();
-      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, byRule: {}, byLabel: {} };
+      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, scoredMessages: 0, minusMessages: 0, byRule: {}, byLabel: {} };
       let deltaRaidViewers = 0;
       for (const { message, category, signal, hits } of this.pending) {
+        growthSignals.scoredMessages++;
+        if (hits.some(hit => hit.points < 0)) growthSignals.minusMessages++;
         for (const hit of hits) {
           if (hit.points >= 0) growthSignals.plusPoints += hit.points; else growthSignals.minusPoints += hit.points;
           growthSignals.byRule[hit.rule] = (growthSignals.byRule[hit.rule] ?? 0) + hit.points;

@@ -16,7 +16,7 @@ export const config = {
   scoring: {
     weights: {
       chat: 0.1, hype: 1, kindness: 1.4, bigBrain: 1.2, curious: 0.5, support: 4,
-      hate: -6, toxic: -1.6, spam: -0.45, shouting: -0.6, copypasta: -0.8, flood: -0.6, lowEffort: -0.2
+      hate: -10, toxic: -2.2, spam: -0.5, shouting: -0.7, copypasta: -1, flood: -0.8, lowEffort: -0.25
     },
     negativeKeywords: [
       "trash", "garbage", "boring", "cringe", "mid", "sucks", "suck", "worst", "stupid", "idiot", "dumb", "loser", "washed",
@@ -35,8 +35,17 @@ export const config = {
      * Destruction mirrors construction: minus points fill the danger meter, and each time it
      * fills a building is knocked down, in paced pulses just like build pulses.
      */
-    destroyThreshold: 4, maxDestroysPerPulse: 2, cooldownMs: 2600,
-    decayPerSecond: 0.12, positiveDefense: 0.22,
+    destroyThreshold: 4.5, maxDestroysPerPulse: 3, cooldownMs: 3200,
+    decayPerSecond: 0.06, positiveDefense: 0.18,
+    /** Danger above this many pulses' worth is dropped, so a burst of trolls cannot snowball. */
+    backlogPulses: 1.5,
+    /**
+     * Haters are a small minority in most chats, so each minus is amplified when negativity is
+     * rare: up to (1 + rarityBoost)x when almost nobody is negative, 1x when everyone is.
+     */
+    rarityBoost: 1.5, rarityWindowSeconds: 60,
+    /** Draining a meter that was at least this full back to zero earns a "HATERS WASHED OUT" bonus. */
+    washOutFrom: 0.5, washOutBonus: 6,
     technologyPenalty: 0.35
   },
   spam: { emoteRatio: 0.6, repeatedCharacterLength: 5, maxShortMessageLength: 4, shortRepeatMinimum: 3 },
