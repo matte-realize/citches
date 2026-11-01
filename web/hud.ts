@@ -28,6 +28,8 @@ export interface HudOptions {
   speakerPoint?: () => { x: number; y: number } | undefined;
   /** Name shown on the scoreboard, e.g. "XQC CITY". */
   cityName?: string;
+  /** A random owned home, for rotating name tags. */
+  featuredHome?: () => { owner: string; at: { x: number; y: number }; level: number } | undefined;
 }
 
 /**
@@ -46,6 +48,7 @@ export class CityHud {
   private recovery = el("div", "recovery-row");
   private leaders = el("div", "leaders-row");
   private upkeepLine = el("div", "upkeep-line");
+  private hint = el("div", "command-hint");
   private lastBubbleAt = 0;
   private sleepSign = el("div", "sleep-sign");
   private zTimer?: ReturnType<typeof setInterval>;
@@ -72,7 +75,12 @@ export class CityHud {
     this.recovery.hidden = true;
     this.leaders.hidden = true;
     this.upkeepLine.hidden = true;
-    board.append(scoreRow, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery);
+    this.hint.innerHTML = "TYPE <b>!plant</b> <b>!repair</b> <b>!cheer</b> <b>!home</b> · KIND CHAT EARNS POINTS";
+    board.append(scoreRow, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery, this.hint);
+    if (options.featuredHome) setInterval(() => {
+      const home = options.featuredHome?.();
+      if (home && !document.body.classList.contains("city-asleep")) this.nameTag(home.owner, home.at, home.level);
+    }, 14_000);
     this.sleepSign.hidden = true;
     this.sleepSign.append(el("span", "sleep-moon", "☾"), el("span", "sleep-text", "STREAM OFFLINE · THE CITY IS SLEEPING"));
     board.prepend(this.sleepSign);
@@ -160,6 +168,39 @@ export class CityHud {
         }
       }, 1400);
     } else this.banner("GOOD MORNING!", "era");
+  }
+
+  /** Name tag floating over a chatter's home. */
+  nameTag(owner: string, at: { x: number; y: number }, level = 1) {
+    const tag = el("div", "name-tag");
+    tag.append(el("span", "name-tag-icon", level >= 3 ? "★" : "⌂"), el("span", "name-tag-name", `${owner}'s home`));
+    tag.style.left = `${Math.max(90, Math.min(innerWidth - 90, at.x))}px`;
+    tag.style.top = `${Math.max(60, Math.min(innerHeight - 160, at.y))}px`;
+    this.popLayer.appendChild(tag);
+    setTimeout(() => tag.remove(), 4500);
+  }
+
+  /** What a chat command did, credited to whoever typed it. */
+  notice(kind: string, user: string, at?: { x: number; y: number }, extra: { level?: number; cost?: number } = {}) {
+    const text: Record<string, string> = {
+      plant: `${user} planted a tree`,
+      repair: `${user} repaired a building`,
+      cheer: `${user} threw a party!`,
+      nohome: `${user} has no home yet. Chat kindly to build one!`,
+      broke: `${user} needs ${extra.cost ?? "more"} pts`,
+      fine: `${user}: the city is in good shape!`,
+      upgrade: `${user}'s home grew to level ${extra.level ?? 1}!`
+    };
+    if (kind === "home" && at) { this.nameTag(user, at, extra.level); return; }
+    const message = text[kind];
+    if (!message) return;
+    const node = el("div", `notice notice-${kind}`, message);
+    if (extra.cost && kind !== "broke" && kind !== "fine") node.append(el("span", "notice-cost", ` -${extra.cost}`));
+    const anchor = at ?? this.options.screenPoint();
+    node.style.left = `${Math.max(140, Math.min(innerWidth - 140, anchor.x))}px`;
+    node.style.top = `${Math.max(60, Math.min(innerHeight - 170, anchor.y - 30))}px`;
+    this.popLayer.appendChild(node);
+    setTimeout(() => node.remove(), 3200);
   }
 
   /** A building fixed up by chat, or one that crumbled after being neglected. */

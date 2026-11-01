@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import type { GrowthSignals } from "../aggregate/aggregator.js";
-import type { Aggregate, AttackKind, CommunityProgress, Counts, ScoreSnapshot, SimEvent } from "../types.js";
+import type { Aggregate, AttackKind, ChatCommand, CommunityProgress, Counts, ScoreSnapshot, SimEvent } from "../types.js";
 
 /** The danger meter is full when about this many buildings' worth of trouble has built up. */
 const METER_PULSES = 3;
@@ -20,6 +20,8 @@ export interface MapperState {
   scoreTotal: number; threat: number; snapshot: ScoreSnapshot;
   leaderboard?: Array<[string, number]>;
   outstandingWear?: number;
+  spent?: Array<[string, number]>;
+  owners?: Array<[string, number, string]>;
 }
 
 export class EventMapper {
@@ -56,6 +58,14 @@ export class EventMapper {
   /** Points per chatter since the last build (credited on it) and across the whole session. */
   private contributors = new Map<string, number>();
   private leaderboard = new Map<string, number>();
+  /** Points each chatter has spent on commands; their balance is leaderboard points minus this. */
+  private spent = new Map<string, number>();
+  private commandReadyAt = new Map<string, number>();
+  private owners = new Map<string, { level: number; lastSeen: number; earned: number; color?: string }>();
+  private colors = new Map<string, string>();
+
+  /** A chatter's spendable points. */
+  balance(user: string) { return Math.floor((this.leaderboard.get(user) ?? 0) - (this.spent.get(user) ?? 0)); }
   private lastTickAt?: number;
   private negativeMix: Record<string, number> = {};
   private snapshot: ScoreSnapshot = { total: 0, gained: 0, lost: 0, threat: 0, threatRatio: 0, pops: [] };
@@ -71,6 +81,8 @@ export class EventMapper {
       recoveryProgress: this.recoveryProgress, recoveryGoal: this.recoveryGoal,
       scoreTotal: this.scoreTotal, threat: this.threat, snapshot: { ...this.snapshot, highlight: undefined },
       outstandingWear: this.outstandingWear,
+      spent: [...this.spent].slice(-500),
+      owners: [...this.owners].slice(-300).map(([name, owner]) => [name, owner.level, owner.color ?? ""] as [string, number, string]),
       leaderboard: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 50)
     };
   }
@@ -80,6 +92,8 @@ export class EventMapper {
     for (const key of numbers) if (typeof state[key] === "number" && Number.isFinite(state[key])) this[key] = state[key] as number;
     if (typeof state.recoveryActive === "boolean") this.recoveryActive = state.recoveryActive;
     if (state.snapshot) this.snapshot = { ...state.snapshot, pops: [] };
+    if (Array.isArray(state.spent)) this.spent = new Map(state.spent.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
+    if (Array.isArray(state.owners)) for (const [name, level, color] of state.owners) if (typeof name === "string") this.owners.set(name, { level: Number(level) || 0, lastSeen: 0, earned: 0, color: color || undefined });
     if (Array.isArray(state.leaderboard)) this.leaderboard = new Map(state.leaderboard.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
   }
 
@@ -158,7 +172,9 @@ export class EventMapper {
       const kept = [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 300);
       this.leaderboard = new Map(kept);
     }
+    for (const [user, color] of Object.entries(signals.colors)) this.colors.set(user, color);
     this.updateScore(signals, seconds);
+    events.push(...this.runCommands(signals, now), ...this.growHomes(signals, now));
 
     while (this.technologyEra < config.technology.milestones.length
       && this.technologyProgress >= config.technology.milestones[this.technologyEra].points) {
@@ -209,6 +225,47 @@ export class EventMapper {
     return events;
   }
 
+  private runCommands(signals: GrowthSignals, now: number): SimEvent[] {
+    const events: SimEvent[] = [];
+    const settings = config.commands;
+    for (const { user, command, color } of signals.commands.slice(0, settings.maxPerTick)) {
+      const rule = settings[command];
+      if (!rule?.enabled) continue;
+      if (color) this.colors.set(user, color);
+      const key = `${user}|${command}`;
+      if ((this.commandReadyAt.get(key) ?? 0) > now) continue; // on cooldown: ignore quietly
+      // Failures only get a short cooldown (enough to stop notice spam); successes the full one.
+      const fail = (reason: string) => { this.commandReadyAt.set(key, now + 10_000); events.push({ type: "command", command, user, ok: false, cost: rule.cost, reason }); };
+      if (command === "repair" && this.outstandingWear <= 0) { fail("nothing to repair"); continue; }
+      if (this.balance(user) < rule.cost) { fail("points"); continue; }
+      this.commandReadyAt.set(key, now + rule.cooldownMs);
+      this.spent.set(user, (this.spent.get(user) ?? 0) + rule.cost);
+      if (command === "repair") { this.outstandingWear--; events.push({ type: "repair", count: 1, by: user }); }
+      else events.push({ type: "command", command: command as ChatCommand, user, ok: true, cost: rule.cost });
+    }
+    if (this.commandReadyAt.size > 2000) for (const [key, at] of this.commandReadyAt) if (at < now) this.commandReadyAt.delete(key);
+    return events;
+  }
+
+  /** Home owners who come back after a break, or keep contributing, see their home grow. */
+  private growHomes(signals: GrowthSignals, now: number): SimEvent[] {
+    const events: SimEvent[] = [];
+    const settings = config.homes;
+    for (const [user, points] of Object.entries(signals.byUser)) {
+      const owner = this.owners.get(user);
+      if (!owner) continue;
+      const returning = now - owner.lastSeen > settings.returnGapMs;
+      owner.lastSeen = now;
+      owner.earned += points;
+      if (owner.level < settings.maxLevel && (returning || owner.earned >= settings.upgradePoints)) {
+        owner.level++;
+        owner.earned = 0;
+        events.push({ type: "homeUpgrade", owner: user, level: owner.level, color: this.colors.get(user) ?? owner.color });
+      }
+    }
+    return events;
+  }
+
   /** Quiet chat wears the city down; positive chat repairs it. Paused while the city sleeps. */
   private updateUpkeep(signals: GrowthSignals, now: number, seconds: number): SimEvent | undefined {
     const upkeep = config.upkeep;
@@ -243,10 +300,11 @@ export class EventMapper {
     return undefined;
   }
 
-  /** The top contributors since the last build get the credit for it. */
-  private takeBuilders() {
+  /** The top contributors since the last build get the credit for it; the first one owns it. */
+  private takeBuilders(now = this.lastTickAt ?? Date.now()) {
     const names = [...this.contributors].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name]) => name);
     this.contributors.clear();
+    for (const name of names) if (!this.owners.has(name)) this.owners.set(name, { level: 1, lastSeen: now, earned: 0, color: this.colors.get(name) });
     return names.length ? names : undefined;
   }
 

@@ -830,8 +830,9 @@ export class ChatCity {
       for (let i = 0; i < 12; i++) {
         const angle = (i / 12) * Math.PI * 2;
         const rib = new Mesh(new CylinderGeometry(0.018, 0.026, 0.73, 4), mat(this.color(this.theme.roof), 1));
-        rib.position.set(Math.cos(angle) * 0.36, 1.22, Math.sin(angle) * 0.36);
-        rib.rotation.z = -Math.cos(angle) * 0.42; rib.rotation.x = Math.sin(angle) * 0.42; building.add(rib);
+        // Lie each rib along the cone's surface, top leaning in toward the peak.
+        rib.position.set(Math.cos(angle) * 0.34, 1.18, Math.sin(angle) * 0.34);
+        rib.rotation.z = Math.cos(angle) * 0.74; rib.rotation.x = -Math.sin(angle) * 0.74; building.add(rib);
       }
       const door = this.box(building, 0.21, 0.42, 0.055, 0, 0, 0.35, 0.47, wood);
       door.rotation.y = 0.08;
@@ -931,14 +932,155 @@ export class ChatCity {
   }
 
   /** Positive chat: the most run-down building gets fixed up a step. */
-  private repairOne(historical: boolean) {
+  private repairOne(historical: boolean): Vector3 | undefined {
     const worn = this.wearable().filter(tile => (tile.building!.userData.wear ?? 0) > 0).sort((a, b) => (b.building!.userData.wear ?? 0) - (a.building!.userData.wear ?? 0));
     const tile = worn[0];
-    if (!tile) return;
+    if (!tile) return undefined;
     this.setWear(tile, (tile.building!.userData.wear ?? 0) - 1);
-    if (historical) return;
+    if (historical) return tile.group.position.clone();
     for (let i = 0; i < 10; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.6, 0.4 + this.random() * 0.6, (this.random() - 0.5) * 0.6)), i % 2 ? 0xffe08a : 0x9ff0b8, 0.035, 0.9, new Vector3(0, 0.8, 0), 0.4);
     this.onUpkeep?.("repair", tile.group.position.clone());
+    return tile.group.position.clone();
+  }
+
+  // ---------- the audience game: commands and owned homes ----------
+  /** Lets the HUD show who did what: "@name planted a tree", name tags over homes, etc. */
+  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim"; user: string; at?: Vector3; level?: number; cost?: number; color?: string }) => void;
+  private homesByOwner = new Map<string, Tile[]>();
+
+  private ownerColor(owner: string, color?: string) {
+    if (color) return new Color(color).getHex();
+    let hash = 0;
+    for (const char of owner) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
+    return new Color().setHSL((hash % 360) / 360, 0.65, 0.55).getHex();
+  }
+
+  private claimHome(tile: Tile, owner: string) {
+    tile.building!.userData.owner = owner;
+    const homes = (this.homesByOwner.get(owner) ?? []).filter(home => home.building?.userData.owner === owner);
+    homes.push(tile);
+    this.homesByOwner.set(owner, homes);
+    const level = Math.max(1, ...homes.map(home => (home.building!.userData.ownerLevel as number | undefined) ?? 0));
+    this.decorateHome(tile, level, tile.building!.userData.ownerColor as string | undefined);
+  }
+
+  private ownedHomes(owner: string) {
+    return (this.homesByOwner.get(owner) ?? []).filter(tile => tile.building?.userData.owner === owner);
+  }
+
+  private upgradeHome(owner: string, level: number, color: string | undefined, historical: boolean) {
+    const homes = this.ownedHomes(owner);
+    for (const tile of homes) {
+      this.decorateHome(tile, level, color);
+      if (!historical) for (let i = 0; i < 12; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.6, 0.5 + this.random() * 0.8, (this.random() - 0.5) * 0.6)), i % 3 ? 0xffe08a : this.ownerColor(owner, color), 0.04, 1, new Vector3(0, 0.9, 0), 0.4);
+    }
+    if (!historical && homes[0]) this.onNotice?.({ kind: "upgrade", user: owner, at: homes[0].group.position.clone(), level });
+  }
+
+  /**
+   * An owned home flies its owner's colour. Level 1: flag and mailbox. Level 2: a garden and a
+   * lantern. Level 3: a golden weathervane and a warm glow.
+   */
+  private decorateHome(tile: Tile, level: number, color?: string) {
+    const building = tile.building!;
+    const owner = building.userData.owner as string;
+    building.userData.ownerLevel = Math.max(level, building.userData.ownerLevel ?? 0);
+    if (color) building.userData.ownerColor = color;
+    const old = building.userData.ownerProps as Group | undefined;
+    if (old) { building.remove(old); disposeObject(old); }
+    const props = new Group();
+    props.userData.keep = true;
+    const tint = mat(this.ownerColor(owner, building.userData.ownerColor), 0.7);
+    const top = new Box3().setFromObject(building).max.y;
+    const pole = new Mesh(new CylinderGeometry(0.008, 0.008, 0.32, 4), mat(0x3a3530, 0.6));
+    pole.position.set(0.36, 0.16, 0.38);
+    const flag = new Mesh(new BoxGeometry(0.13, 0.08, 0.008), tint);
+    flag.position.set(0.43, 0.28, 0.38);
+    const mailbox = new Mesh(new BoxGeometry(0.05, 0.05, 0.07), tint);
+    mailbox.position.set(-0.36, 0.1, 0.42);
+    props.add(pole, flag, mailbox);
+    const tier = building.userData.ownerLevel as number;
+    if (tier >= 2) {
+      for (let i = 0; i < 6; i++) {
+        const bloom = new Mesh(new SphereGeometry(0.022, 5, 4), mat([0xe46a8a, 0xf2c94c, 0xb98be0, 0xf5f0e6][i % 4], 0.9));
+        bloom.position.set(-0.2 + i * 0.08, 0.035, 0.44);
+        props.add(bloom);
+      }
+      const lantern = new Mesh(new BoxGeometry(0.04, 0.06, 0.04), mat(this.theme.glow, 0.3, { emissive: this.theme.glow, emissiveIntensity: 1.6 }));
+      lantern.position.set(0.18, 0.26, 0.43);
+      props.add(lantern);
+    }
+    if (tier >= 3) {
+      const vane = new Mesh(new ConeGeometry(0.03, 0.14, 4), mat(0xffd35a, 0.3, { metalness: 0.7, emissive: 0x8a6a1a, emissiveIntensity: 0.6 }));
+      vane.position.set(0, top + 0.08, 0);
+      const arrow = new Mesh(new BoxGeometry(0.16, 0.012, 0.012), mat(0xffd35a, 0.3, { metalness: 0.7 }));
+      arrow.position.set(0, top + 0.12, 0);
+      props.add(vane, arrow);
+      props.userData.vane = arrow;
+    }
+    building.add(props);
+    building.userData.ownerProps = props;
+    this.shadowsDirty = true;
+  }
+
+  private runCommand(event: Extract<SimEvent, { type: "command" }>, historical: boolean) {
+    if (!event.ok) {
+      if (!historical) this.onNotice?.({ kind: event.reason === "points" ? "broke" : "fine", user: event.user, cost: event.cost });
+      return;
+    }
+    if (event.command === "plant") {
+      const spot = this.plantTree(historical);
+      if (!historical) this.onNotice?.({ kind: "plant", user: event.user, at: spot, cost: event.cost });
+    } else if (event.command === "cheer" && !historical) {
+      this.celebrate();
+      this.onNotice?.({ kind: "cheer", user: event.user, at: this.focus.clone(), cost: event.cost });
+    } else if (event.command === "home" && !historical) {
+      const homes = this.ownedHomes(event.user);
+      if (!homes.length) { this.onNotice?.({ kind: "nohome", user: event.user }); return; }
+      for (const home of homes) this.beacon(home.group.position, this.ownerColor(event.user, home.building!.userData.ownerColor));
+      this.onNotice?.({ kind: "home", user: event.user, at: homes[0].group.position.clone() });
+    }
+  }
+
+  /** A chatter-planted tree: on an empty lot or a block's backyard, growing up from a sapling. */
+  private plantTree(historical: boolean) {
+    const spots = this.tiles.filter(tile => tile.group.visible && tile.kind === "empty" && !tile.building && !this.isStreet(tile) && !this.pathTiles.has(this.key(tile.x, tile.z)) && !this.actorTiles.has(this.key(tile.x, tile.z)) && tile.trees.length < 3);
+    const hearth = this.hearthTile;
+    spots.sort((a, b) => (hearth ? Math.hypot(a.x - hearth.x, a.z - hearth.z) - Math.hypot(b.x - hearth.x, b.z - hearth.z) : 0));
+    const tile = spots[Math.floor(this.random() * Math.min(spots.length, 12))];
+    if (!tile) return undefined;
+    this.addTree(tile, (this.random() - 0.5) * 0.5, (this.random() - 0.5) * 0.5, 0.55 + this.random() * 0.3);
+    const tree = tile.trees[tile.trees.length - 1];
+    if (!historical && tree) {
+      const final = tree.scale.x;
+      tree.scale.setScalar(0.05);
+      let t = 0;
+      this.effects.push(delta => { t += delta / 1.2; const s = Math.min(1, t); tree.scale.setScalar(final * (s < 1 ? 1 - Math.pow(1 - s, 3) + Math.sin(s * Math.PI) * 0.15 : 1)); this.shadowsDirty = true; return s >= 1; });
+      for (let i = 0; i < 8; i++) this.puff(tile.group.position.clone().add(new Vector3(0, 0.3, 0)), 0x8fdf6a, 0.03, 0.8, new Vector3((this.random() - 0.5) * 1.2, 0.8, (this.random() - 0.5) * 1.2), 1);
+    }
+    return tile.group.position.clone();
+  }
+
+  /** A column of light over someone's home for a few seconds. */
+  private beacon(at: Vector3, color: number) {
+    const pillar = new Mesh(new CylinderGeometry(0.16, 0.22, 6, 8, 1, true), new MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false, toneMapped: false }));
+    pillar.position.copy(at).setY(3);
+    this.root.add(pillar);
+    let t = 0;
+    this.effects.push(delta => {
+      t += delta;
+      (pillar.material as MeshBasicMaterial).opacity = 0.35 * Math.max(0, 1 - t / 5) * (0.8 + Math.sin(t * 8) * 0.2);
+      if (t < 5) return false;
+      this.root.remove(pillar); disposeObject(pillar);
+      return true;
+    });
+  }
+
+  /** A random owned home (for the HUD's rotating name tags). */
+  featuredHome() {
+    const owned = this.tiles.filter(tile => tile.building?.userData.owner);
+    const tile = owned[Math.floor(Math.random() * owned.length)];
+    return tile ? { owner: tile.building!.userData.owner as string, at: this.screenPoint(tile.group.position.clone().setY(0.4)), level: tile.building!.userData.ownerLevel as number } : undefined;
   }
 
   private setWear(tile: Tile, level: number) {
@@ -1369,7 +1511,8 @@ export class ChatCity {
     }
   }
 
-  build(kind: "house" | "landmark", count: number, immediate = false) {
+  build(kind: "house" | "landmark", count: number, immediate = false, builders: string[] = []) {
+    const owners = kind === "house" ? [...builders] : [];
     for (let n = 0; n < Math.min(30, Math.max(0, count)); n++) {
       let tile = this.chooseLot(kind);
       if (!tile && this.activeRadius < 15.5) {
@@ -1385,6 +1528,9 @@ export class ChatCity {
       const built = special ? this.makeSpecial(tile, immediate) : kind === "house" ? this.makeHouse(tile, immediate) : this.makeLandmark(tile, immediate);
       if (built && special) this.buildsSinceSpecial = 0;
       if (!built) continue;
+      // The chatters credited for this build own the homes it made, one each.
+      const owner = owners.shift();
+      if (owner && tile.kind === "house" && tile.building) this.claimHome(tile, owner);
       this.focus.copy(tile.group.position);
       this.totalBuildings++;
       if (this.technologyEra <= 1 && this.totalBuildings % 2 === 0) this.addAnimal(tile);
@@ -1398,6 +1544,16 @@ export class ChatCity {
   /** Neighbourhoods modernise over time: one home two or more eras behind is rebuilt in today's style. */
   private upgradeOldHome(immediate: boolean) {
     if (this.recoveryEra !== undefined || this.eraIndex < 2) return;
+    // Village lodges and other landmarks three or more eras out of date are rebuilt too (not civic specials).
+    const staleLandmark = this.tiles.find(tile => tile.building && tile.kind === "landmark" && !tile.building.userData.special && tile.building.userData.collapse === undefined && (tile.building.userData.era ?? 0) <= this.eraIndex - 3);
+    if (staleLandmark && this.random() < 0.5) {
+      const old = staleLandmark.building!;
+      staleLandmark.group.remove(old);
+      staleLandmark.building = undefined;
+      staleLandmark.kind = "empty";
+      if (this.makeLandmark(staleLandmark, immediate)) disposeObject(old);
+      else { staleLandmark.group.add(old); staleLandmark.building = old; staleLandmark.kind = "landmark"; }
+    }
     const stale = this.tiles.filter(tile => tile.building && tile.kind === "house" && (tile.building.userData.era ?? 0) <= this.eraIndex - 2);
     if (!stale.length) return;
     const tile = stale[Math.floor(this.random() * stale.length)];
@@ -1405,7 +1561,15 @@ export class ChatCity {
     tile.group.remove(old);
     tile.building = undefined;
     tile.kind = "empty";
-    if (this.makeHouse(tile, immediate)) disposeObject(old);
+    if (this.makeHouse(tile, immediate)) {
+      // Owners keep their home (and its level) when it is rebuilt in a newer style.
+      if (old.userData.owner) {
+        tile.building!.userData.ownerLevel = old.userData.ownerLevel;
+        tile.building!.userData.ownerColor = old.userData.ownerColor;
+        this.claimHome(tile, old.userData.owner as string);
+      }
+      disposeObject(old);
+    }
     else { tile.group.add(old); tile.building = old; tile.kind = "house"; }
   }
 
@@ -1631,12 +1795,14 @@ export class ChatCity {
 
   apply(event: SimEvent, historical = false) {
     if (event.type === "advancement") { this.unlockTechnology(event.era); if (!historical) this.celebrate(); }
-    else if (event.type === "build") this.build(event.kind, event.count, historical);
+    else if (event.type === "build") this.build(event.kind, event.count, historical, event.builders);
+    else if (event.type === "command") this.runCommand(event, historical);
+    else if (event.type === "homeUpgrade") this.upgradeHome(event.owner, event.level, event.color, historical);
     else if (event.type === "boom") this.boom(event.viewers, historical);
     else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs, event.kind);
     else if (event.type === "effect" && !historical) { this.fireworks(this.focus.x, this.focus.z, event.intensity); this.life.cheer(3); }
     else if (event.type === "decay") for (let i = 0; i < event.count; i++) this.wearDown(historical);
-    else if (event.type === "repair") for (let i = 0; i < event.count; i++) this.repairOne(historical);
+    else if (event.type === "repair") for (let i = 0; i < event.count; i++) { const at = this.repairOne(historical); if (event.by && at && !historical) this.onNotice?.({ kind: "repair", user: event.by, at }); }
   }
 
   private updateBuildings(delta: number) {

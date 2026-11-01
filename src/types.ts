@@ -6,6 +6,8 @@ export interface ChatMessage {
   isRaid: boolean;
   raidViewerCount: number;
   supportPoints?: number;
+  /** The chatter's Twitch name colour, used for the flag on their home. */
+  color?: string;
 }
 
 export type Category = "RAID" | "SPAM" | "QUESTION" | "HATE" | "COMMENT";
@@ -22,10 +24,15 @@ export type SimEvent =
   | { type: "boom"; viewers: number }
   /** Quiet chat wears one building down a step; positive chat repairs the most worn one. */
   | { type: "decay"; count: number }
-  | { type: "repair"; count: number }
+  | { type: "repair"; count: number; by?: string }
+  /** A chat command: `ok` is false when the chatter could not afford it (`cost`) or it did nothing. */
+  | { type: "command"; command: ChatCommand; user: string; ok: boolean; cost?: number; reason?: string }
+  /** A home owner came back or kept contributing, so their home grows a level (1-3). */
+  | { type: "homeUpgrade"; owner: string; level: number; color?: string }
   | { type: "disaster"; kind: AttackKind; intensity: number; damageCount?: number; durationMs?: number; reason?: string };
 
 export type AttackKind = "fire" | "meteor" | "storm" | "swarm";
+export type ChatCommand = "plant" | "repair" | "cheer" | "home";
 export interface ScorePop { label: string; points: number }
 /** Running city score shown in the overlay: total points, danger meter, and labelled pops for this tick. */
 export interface ChatHighlight { user: string; text: string }

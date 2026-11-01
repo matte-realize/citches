@@ -44,11 +44,13 @@ const city = new ChatCity(host, themeFromSearch(`?${params}`), {
   hour: params.has("hour") ? Number(params.get("hour")) : undefined
 });
 city.onUpkeep = (kind, at) => hud.upkeepPop(kind, city.screenPoint(at));
+city.onNotice = notice => hud.notice(notice.kind, notice.user, notice.at ? city.screenPoint(notice.at) : undefined, { level: notice.level, cost: notice.cost });
 if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) (window as unknown as { chatCity: ChatCity }).chatCity = city;
 const hud = new CityHud({
   overlay,
   screenPoint: () => city.screenPoint(city.focus),
   speakerPoint: () => city.speakerPoint(),
+  featuredHome: () => city.featuredHome(),
   cityName: chatChannel ? `${chatChannel} city` : params.get("name") ?? undefined
 });
 

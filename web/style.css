@@ -117,6 +117,28 @@ html.overlay .score-total { font-size: 18px; }
 .pop-credit { color: var(--gold); text-shadow: 2px 2px 0 var(--gold-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); }
 .pop-credit .pop-label { font-size: 16px; color: var(--text); }
 
+/* The audience game. */
+.command-hint { margin-top: 8px; font-size: 11px; color: var(--muted); letter-spacing: .03em; }
+.command-hint b { font-family: var(--chunky); font-size: 8px; color: var(--gold); font-weight: 400; margin-right: 2px; }
+html.overlay .command-hint { font-size: 10px; }
+.name-tag {
+  position: absolute; display: flex; gap: 5px; align-items: center; padding: 4px 8px; transform: translate(-50%, -100%);
+  background: var(--panel); box-shadow: 0 0 0 2px var(--ink), 0 4px 0 rgba(0, 0, 0, .3); font-size: 13px; white-space: nowrap;
+  animation: speech-life 4.5s cubic-bezier(.3, 1.8, .5, 1) forwards;
+}
+.name-tag-icon { color: var(--gold); }
+.notice {
+  position: absolute; transform: translate(-50%, -50%); padding: 5px 10px; white-space: nowrap;
+  font-size: 14px; color: var(--text); background: rgba(16, 20, 28, .85); box-shadow: 0 0 0 2px var(--ink);
+  animation: pop-float 3.2s cubic-bezier(.2, .8, .3, 1) forwards; --tilt: 0deg;
+}
+.notice-plant { color: #9ff0b8; }
+.notice-repair { color: #9ff0b8; }
+.notice-cheer { color: var(--gold); }
+.notice-upgrade { color: var(--gold); }
+.notice-broke, .notice-nohome { color: #c9d4e0; font-size: 12px; }
+.notice-cost { font-family: var(--chunky); font-size: 8px; color: var(--muted); }
+
 /* Upkeep. */
 .upkeep-line { margin-top: 8px; font-family: var(--chunky); font-size: 8px; letter-spacing: .04em; }
 .upkeep-line.decaying { color: #d8b48a; animation: blink 1.6s steps(2) infinite; }

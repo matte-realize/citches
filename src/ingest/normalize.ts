@@ -38,6 +38,7 @@ export function normalizeTwitchMessage(
     emotes: normalizeEmotes(tags.emotes),
     isRaid: (overrides?.event ?? tags["msg-id"]) === "raid",
     raidViewerCount: Number(tags["msg-param-viewerCount"] ?? 0),
-    supportPoints: supportValue(tags, overrides)
+    supportPoints: supportValue(tags, overrides),
+    color: typeof tags.color === "string" && /^#[0-9a-f]{6}$/i.test(tags.color) ? tags.color : undefined
   };
 }

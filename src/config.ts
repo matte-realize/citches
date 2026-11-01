@@ -74,6 +74,19 @@ export const config = {
     repairCooldownMs: 3000,
     typicalWindowMinutes: 20
   },
+  /**
+   * Chat commands. Chatters spend the points their positive messages earned; each command has a
+   * per-viewer cooldown so nobody can spam it.
+   */
+  commands: {
+    plant: { enabled: true, cost: 3, cooldownMs: 60_000 },
+    repair: { enabled: true, cost: 6, cooldownMs: 90_000 },
+    cheer: { enabled: true, cost: 4, cooldownMs: 45_000 },
+    home: { enabled: true, cost: 0, cooldownMs: 30_000 },
+    maxPerTick: 3
+  },
+  /** Owned homes grow when their owner comes back after a break or keeps contributing. */
+  homes: { returnGapMs: 10 * 60_000, upgradePoints: 30, maxLevel: 3 },
   /** What `npm run calibrate` checks the danger system against, using real chat logs. */
   calibration: {
     lostPerBuilt: [0.03, 0.3] as [number, number],     // losses are noticeable but never outpace growth
