@@ -33,7 +33,13 @@ Every message runs through a list of scoring rules (`src/score/rules.ts`). Each 
 | --- | --- |
 | HYPE (positive words), KINDNESS (thanks, respect, <3), BIG BRAIN (long, varied messages), CURIOUS (questions), SUPPORT (bits/subs), plus a small silent bonus for any real chat | TOXIC (insult/negativity list), HATE (`HATE_KEYWORDS` env, comma separated), SPAM, SHOUTING (mostly caps), COPYPASTA (the same text 3+ times in 20 s), FLOOD (one user posting 4+ times in 10 s), MEH (one-letter messages) |
 
-Points accumulate into the on-screen **CITY POINTS** counter, and each tick's biggest reasons float up from the city as `+1.4 KINDNESS` / `-1.6 COPYPASTA` pops. Minuses also fill the **DANGER** meter (`config.threat`); pluses drain it, and it decays on its own. When it fills, the city is attacked, and the dominant kind of negativity picks the attack: toxic chat calls a meteor or fire, all caps calls a lightning storm, and spam, copypasta or floods call a locust swarm that gnaws buildings down. Minuses also slightly slow technology progress, but never undo a milestone that was already reached.
+Points accumulate into the on-screen **CITY POINTS** counter, and each tick's biggest reasons float up from the city as `+1.4 KINDNESS` / `-1.6 COPYPASTA` pops. Destruction mirrors construction: minus points fill the **DANGER** meter (`config.threat`), pluses drain it, and every time it fills a building is knocked down. These are paced pulses of one or two buildings, like build pulses, instead of one big disaster at the end. The dominant kind of negativity picks how it falls: toxic chat calls a meteor or fire, all caps calls lightning, and spam, copypasta or floods call a locust swarm. Outskirts homes are hit before the old centre and landmarks. Demolition plays the build animation in reverse, stepping down in chunky layers. Minuses also slightly slow technology progress, but never undo a milestone that was already reached. Only hate keywords trigger a big disaster and a recovery period.
+
+## Town planning
+
+The plot is laid out in planned blocks: streets run every four tiles, so each block is eight street-facing lots around a backyard tile (trees, vegetable plots or a sheep paddock). The founding campfire sits in the central block as an open plaza. New homes go to the best lot: infill on streets that already exist first, then compact growth outward, finishing partly built blocks before starting new ones; landmarks prefer corner lots. Every home's front door faces its street.
+
+The 3D scene renders at low resolution and is upscaled with nearest-neighbour filtering for a pixel-art look. `?pixel=3` (default; `2` in overlay mode) sets how many screen pixels each rendered pixel covers, and `?pixel=1` turns it off.
 
 ## Twitch extension overlay
 

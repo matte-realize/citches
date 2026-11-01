@@ -25,6 +25,7 @@ export class EventMapper {
   private scoreTotal = 0;
   private threat = 0;
   private lastAttackAt = 0;
+  private lastFireworksAt = 0;
   private lastTickAt = Date.now();
   private negativeMix: Record<string, number> = {};
   private snapshot: ScoreSnapshot = { total: 0, gained: 0, lost: 0, threat: 0, threatRatio: 0, pops: [] };
@@ -123,7 +124,10 @@ export class EventMapper {
     const intensity = (count: number) => Math.min(10, count * config.events.intensityMultiplier * rateScale);
     // Celebrations come from bursts of hype and kindness, not from spam.
     const cheer = (signals.byRule.hype ?? 0) + (signals.byRule.kindness ?? 0) + (signals.byRule.support ?? 0);
-    if (cheer >= config.events.fireworksThreshold) events.push({ type: "effect", kind: "fireworks", intensity: Math.min(10, cheer * 0.6 * rateScale) });
+    if (cheer >= config.events.fireworksThreshold && now - this.lastFireworksAt >= config.events.fireworksCooldownMs) {
+      this.lastFireworksAt = now;
+      events.push({ type: "effect", kind: "fireworks", intensity: Math.min(10, cheer * 0.6 * rateScale) });
+    }
     if (delta.RAID && deltaRaidViewers >= config.events.raidMinimumViewers) events.push({ type: "boom", viewers: deltaRaidViewers });
     if (aggregate.counts.HATE >= config.events.disasterThreshold && delta.HATE > 0) {
       const disasterIntensity = intensity(delta.HATE);
@@ -146,7 +150,7 @@ export class EventMapper {
     const threat = config.threat;
     this.scoreTotal += signals.plusPoints + signals.minusPoints;
     this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - signals.minusPoints);
-    this.threat = Math.min(this.threat, threat.threshold * 1.5);
+    this.threat = Math.min(this.threat, threat.destroyThreshold * threat.maxDestroysPerPulse * 3);
     const fade = Math.exp(-seconds / 20);
     for (const rule of Object.keys(this.negativeMix)) this.negativeMix[rule] *= fade;
     for (const [rule, points] of Object.entries(signals.byRule)) if (points < 0) this.negativeMix[rule] = (this.negativeMix[rule] ?? 0) - points;
@@ -160,30 +164,29 @@ export class EventMapper {
       gained: Math.round(signals.plusPoints * 10) / 10,
       lost: Math.round(signals.minusPoints * 10) / 10,
       threat: Math.round(this.threat * 10) / 10,
-      threatRatio: Math.min(1, this.threat / threat.threshold),
+      threatRatio: Math.min(1, this.threat / threat.destroyThreshold),
       pops
     };
   }
 
+  /** A destruction pulse, paced like build pulses: one or two buildings each time the meter fills. */
   private maybeAttack(now: number): SimEvent | undefined {
     const threat = config.threat;
-    if (this.threat < threat.threshold || now - this.lastAttackAt < threat.cooldownMs) return undefined;
+    if (this.threat < threat.destroyThreshold || now - this.lastAttackAt < threat.cooldownMs) return undefined;
+    const count = Math.min(threat.maxDestroysPerPulse, Math.floor(this.threat / threat.destroyThreshold));
+    this.threat -= count * threat.destroyThreshold;
+    this.lastAttackAt = now;
     const [rule] = Object.entries(this.negativeMix).sort((a, b) => b[1] - a[1])[0] ?? ["toxic"];
     const kinds = ATTACK_FOR_RULE[rule] ?? ["fire"];
     const kind = kinds[Math.floor(Math.random() * kinds.length)];
-    const intensity = Math.min(threat.maxIntensity, 1.5 + (this.threat / threat.threshold) * 1.5);
-    this.threat *= threat.carryOver;
-    this.lastAttackAt = now;
-    this.negativeMix = {};
-    this.startRecovery(intensity * 0.5);
-    this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / threat.threshold) };
+    this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / threat.destroyThreshold) };
     return {
-      type: "disaster", kind, intensity,
-      damageCount: Math.max(1, Math.ceil(intensity * 1.2)),
+      type: "disaster", kind, intensity: count, damageCount: count,
       durationMs: config.events.burnDurationMs,
       reason: ATTACK_REASON[rule] ?? "TROUBLE"
     };
   }
+
 
   private startRecovery(intensity: number) {
     const recovery = config.recovery;

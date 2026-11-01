@@ -1,9 +1,9 @@
-import { ACESFilmicToneMapping, Box3, BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
+import { ACESFilmicToneMapping, Box3, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
 import { HomeKit } from "./homes.js";
-import { disposeObject } from "./kit.js";
+import { bakeStatic, disposeObject } from "./kit.js";
 import { CityLife } from "./life.js";
 import type { Door, NetCell } from "./life.js";
 import { DIRS, buildStreetLayer } from "./streets.js";
@@ -15,9 +15,11 @@ export type { CityThemeId } from "./theme.js";
 
 type TileKind = "empty" | "house" | "landmark" | "fire";
 type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number };
-type Particle = { mesh: Mesh; velocity: Vector3; life: number; maxLife: number; gravity: number; drag?: number; onDone?: () => void };
+type Particle = { position: Vector3; velocity: Vector3; size: number; color: Color; life: number; maxLife: number; gravity: number; drag?: number };
+const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
-export interface CityOptions { transparent?: boolean; zoom?: number }
+/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 3 = chunky). */
+export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number }
 
 const GRID = 32;
 export function themeFromSearch(search = window.location.search): CityThemeId {
@@ -33,11 +35,48 @@ const mat = (color: ColorRepresentation, roughness = 0.88, extra: Partial<MeshSt
 export class ChatCity {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(-24, 24, 24, -24, 0.1, 200);
-  readonly renderer = new WebGLRenderer({ antialias: true, alpha: true, premultipliedAlpha: true });
+  readonly renderer: WebGLRenderer;
   private root = new Group();
   private tiles: Tile[] = [];
   private tileByCoord = new Map<string, Tile>();
   private particles: Particle[] = [];
+  /** Every spark, ember and dust mote is one instance of a single cube mesh: one draw call total. */
+  private particleMesh = (() => {
+    const mesh = new InstancedMesh(new BoxGeometry(1, 1, 1), new MeshBasicMaterial({ toneMapped: false }), MAX_PARTICLES);
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    mesh.setColorAt(0, new Color(1, 1, 1));
+    return mesh;
+  })();
+  private particleDummy = new Object3D();
+  /**
+   * Fires and lightning share a fixed pool of point lights. Adding or removing lights changes
+   * three.js shader variants and recompiles every material, so the light count never changes.
+   */
+  private lightPool: PointLight[] = Array.from({ length: 4 }, () => {
+    const light = new PointLight(0xffffff, 0, 3, 2);
+    light.userData.free = true;
+    return light;
+  });
+
+  private claimLight(color: number, distance: number, decay: number, at: Vector3) {
+    const light = this.lightPool.find(candidate => candidate.userData.free);
+    if (!light) return undefined;
+    light.userData.free = false;
+    light.color.setHex(color);
+    light.distance = distance;
+    light.decay = decay;
+    light.position.copy(at);
+    light.intensity = 0;
+    return light;
+  }
+
+  private releaseLight(light?: PointLight) {
+    if (!light) return;
+    light.intensity = 0;
+    light.userData.free = true;
+  }
   private pathTiles = new Set<string>();
   private actorTiles = new Set<string>();
   /** Street tile key -> directions (DIRS index) where a front door opens onto it. */
@@ -74,6 +113,7 @@ export class ChatCity {
   private targetSpan = 18;
   private transparent: boolean;
   private zoom: number;
+  private pixelSize: number;
   private cameraBase = new Vector3(35, 43, 35);
 
   constructor(private host: HTMLElement, themeId: CityThemeId = themeFromSearch(), options: CityOptions = {}) {
@@ -92,7 +132,10 @@ export class ChatCity {
       },
       cityRadius: () => this.activeRadius
     }, this.theme, themeId);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Render the city at low resolution and upscale with nearest-neighbour for a true pixel-art look.
+    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 3));
+    this.renderer = new WebGLRenderer({ antialias: this.pixelSize === 1, alpha: true, premultipliedAlpha: true });
+    this.renderer.setPixelRatio(this.pixelSize === 1 ? Math.min(window.devicePixelRatio, 2) : 1 / this.pixelSize);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFShadowMap;
     this.renderer.outputColorSpace = SRGBColorSpace;
@@ -108,6 +151,8 @@ export class ChatCity {
       this.scene.fog = new Fog(this.theme.sky, 48, 100);
     }
     this.scene.add(this.root);
+    this.scene.add(this.particleMesh);
+    for (const light of this.lightPool) this.root.add(light);
     this.addLighting();
     this.makeGround();
     this.makeTiles();
@@ -358,6 +403,7 @@ export class ChatCity {
         const next = this.tileByCoord.get(this.key(current.x + dx, current.z + dz));
         if (!next || next === blocked || !next.group.visible || next.building) continue;
         if (this.actorTiles.has(this.key(next.x, next.z))) continue;
+        if (!this.isStreet(next) && !this.pathTiles.has(this.key(next.x, next.z))) continue;
         if (next.kind !== "empty" && !this.pathTiles.has(this.key(next.x, next.z))) continue;
         const nextKey = this.key(next.x, next.z);
         if (previous.has(nextKey)) continue;
@@ -375,7 +421,9 @@ export class ChatCity {
       if (!access || !access.group.visible || access.building || this.actorTiles.has(this.key(access.x, access.z))) continue;
       const accessKey = this.key(access.x, access.z);
       if (access.kind !== "empty" && !this.pathTiles.has(accessKey)) continue;
+      if (!this.isStreet(access) && !this.pathTiles.has(accessKey)) continue;
       const route = this.findRouteToPath(access, tile);
+      // Prefer fronting a street that already exists, then the shortest extension.
       if (route && (!best || route.length < best.route.length)) best = { dx: direction.dx, dz: direction.dz, yaw: direction.yaw, route };
     }
     return best;
@@ -457,8 +505,7 @@ export class ChatCity {
   private addAnimal(tile: Tile) {
     if (this.pastures >= 5) return;
     const pasture = this.tiles
-      .filter(cell => cell.group.visible && cell.kind === "empty" && !cell.building && !this.pathTiles.has(this.key(cell.x, cell.z)) && !this.actorTiles.has(this.key(cell.x, cell.z)))
-      .filter(cell => Math.abs(cell.x - tile.x) + Math.abs(cell.z - tile.z) <= 2)
+      .filter(cell => cell.group.visible && this.isInterior(cell) && cell.kind === "empty" && !cell.building && !this.actorTiles.has(this.key(cell.x, cell.z)))
       .sort((a, b) => (Math.abs(a.x - tile.x) + Math.abs(a.z - tile.z)) - (Math.abs(b.x - tile.x) + Math.abs(b.z - tile.z)))[0];
     if (!pasture) return;
     for (const tree of pasture.trees) pasture.group.remove(tree);
@@ -773,6 +820,7 @@ export class ChatCity {
       const flame = new Mesh(new ConeGeometry(0.075 - i * 0.012, 0.25 + i * 0.08, 6), mat(i === 1 ? 0xffa43d : 0xffd26b, 0.45, { emissive: i === 1 ? 0xff4e14 : 0xf28a23, emissiveIntensity: 1.8 }));
       flame.position.set((i - 1) * 0.055, 0.17 + i * 0.035, (i % 2) * 0.045); flame.userData.hearthPhase = i * 1.7; hearth.add(flame);
     }
+    hearth.userData.keep = true;
     parent.add(hearth);
     parent.userData.hearth = hearth;
   }
@@ -964,6 +1012,7 @@ export class ChatCity {
   }
 
   private animateBuild(building: Group, tile: Tile, immediate = false) {
+    bakeStatic(building);
     building.userData.buildElapsed = immediate ? 1 : 0;
     building.userData.tile = tile;
     building.userData.era = this.eraIndex;
@@ -971,25 +1020,119 @@ export class ChatCity {
     building.position.y = immediate ? 0 : 0.49;
   }
 
+  // ---------- town planning ----------
+  // Streets run every BLOCK tiles, so the plot divides into 3x3 blocks: eight lots that front a
+  // street around one interior tile kept as a backyard, garden or paddock. The founding campfire
+  // sits in the central block, which stays an open plaza.
+  private static readonly BLOCK = 4;
+  private static readonly BUILD_STEPS = 6;
+  private static readonly UNBUILD_SECONDS = 0.9;
+  private static readonly STREET_OFFSET = 13;
+  private gridMod(value: number) { const m = (value - ChatCity.STREET_OFFSET) % ChatCity.BLOCK; return m < 0 ? m + ChatCity.BLOCK : m; }
+  private isStreet(tile: Tile) { return this.gridMod(tile.x) === 0 || this.gridMod(tile.z) === 0; }
+  private isInterior(tile: Tile) { return this.gridMod(tile.x) === 2 && this.gridMod(tile.z) === 2; }
+  private blockInterior(tile: Tile) {
+    const bx = tile.x - this.gridMod(tile.x) + 2, bz = tile.z - this.gridMod(tile.z) + 2;
+    return this.tileByCoord.get(this.key(bx, bz));
+  }
+
+  private isOpenLot(tile: Tile) {
+    const key = this.key(tile.x, tile.z);
+    return tile.group.visible && tile.kind === "empty" && !tile.building && !this.isStreet(tile) && !this.isInterior(tile)
+      && !this.pathTiles.has(key) && !this.actorTiles.has(key);
+  }
+
+  /** Score a lot like a planner would: infill existing streets, grow compactly, finish blocks. */
+  private lotScore(tile: Tile, kind: "house" | "landmark", extension: number) {
+    const hearth = this.hearthTile;
+    const distance = hearth ? Math.hypot(tile.x - hearth.x, tile.z - hearth.z) : 0;
+    let neighbors = 0;
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const other = this.tileByCoord.get(this.key(tile.x + dx, tile.z + dz));
+      if (other && other !== tile && other.building && !this.isStreet(other)) neighbors++;
+    }
+    const streetSides = this.accessNeighbors(tile).filter(n => n.tile && this.isStreet(n.tile)).length;
+    let score = -distance * 0.45 - extension * 1.1 + neighbors * 0.55 + this.random() * 0.7;
+    if (kind === "landmark") score += (streetSides >= 2 ? 1.6 : 0) - neighbors * 0.3; // landmarks like corners and breathing room
+    else if (streetSides >= 2 && distance > 3) score -= 0.25; // ordinary homes leave corners for shops and landmarks
+    return score;
+  }
+
+  /** Street tiles each lot would need to pave, from one multi-source search over the planned grid. */
+  private streetDistances() {
+    const distance = new Map<string, number>();
+    const queue: Tile[] = [];
+    for (const key of this.pathTiles) {
+      const tile = this.tileByCoord.get(key);
+      if (tile?.group.visible) { distance.set(key, 0); queue.push(tile); }
+    }
+    for (let i = 0; i < queue.length; i++) {
+      const current = queue[i];
+      const d = distance.get(this.key(current.x, current.z))!;
+      for (const [dx, dz] of DIRS) {
+        const next = this.tileByCoord.get(this.key(current.x + dx, current.z + dz));
+        if (!next || !next.group.visible || next.building || !this.isStreet(next)) continue;
+        const key = this.key(next.x, next.z);
+        if (distance.has(key) || this.actorTiles.has(key)) continue;
+        distance.set(key, d + 1);
+        queue.push(next);
+      }
+    }
+    return distance;
+  }
+
+  private chooseLot(kind: "house" | "landmark") {
+    const distance = this.streetDistances();
+    const ranked: Array<{ tile: Tile; score: number }> = [];
+    for (const tile of this.tiles) {
+      if (!this.isOpenLot(tile)) continue;
+      let extension = Infinity;
+      for (const { tile: street } of this.accessNeighbors(tile)) {
+        if (!street || !this.isStreet(street)) continue;
+        const d = distance.get(this.key(street.x, street.z));
+        if (d !== undefined) extension = Math.min(extension, d === 0 ? 0 : d + 1);
+      }
+      if (extension === Infinity) continue;
+      ranked.push({ tile, score: this.lotScore(tile, kind, extension) });
+    }
+    ranked.sort((a, b) => b.score - a.score);
+    // Only the front-runners pay for a full route check.
+    return ranked.slice(0, 6).find(({ tile }) => this.findAccessPlan(tile))?.tile;
+  }
+
+  /** When a block gets its first neighbours, its middle becomes a shared backyard. */
+  private tendBackyard(lot: Tile) {
+    const yard = this.blockInterior(lot);
+    if (!yard || !yard.group.visible || yard.building || yard.trees.length || this.actorTiles.has(this.key(yard.x, yard.z))) return;
+    const style = Math.floor(this.random() * 3);
+    if (style === 0) {
+      this.addTree(yard, -0.2, -0.18, 0.72);
+      this.addTree(yard, 0.22, 0.2, 0.58);
+    } else {
+      this.addTree(yard, (this.random() - 0.5) * 0.4, (this.random() - 0.5) * 0.4, 0.65);
+      const plot = new Group();
+      const soil = new Mesh(new BoxGeometry(0.5, 0.025, 0.36), mat(0x4a3a2a, 1));
+      soil.position.y = 0.012;
+      plot.add(soil);
+      for (let i = 0; i < 3; i++) {
+        const row = new Mesh(new BoxGeometry(0.44, 0.04, 0.05), mat(style === 1 ? 0x6b8f3e : 0xd8be73, 1));
+        row.position.set(0, 0.035, -0.11 + i * 0.11);
+        plot.add(row);
+      }
+      plot.position.set(0.12, 0, -0.15);
+      yard.group.add(plot);
+      yard.trees.push(plot);
+    }
+  }
+
   build(kind: "house" | "landmark", count: number, immediate = false) {
     for (let n = 0; n < Math.min(30, Math.max(0, count)); n++) {
-      const hearthTile = this.tiles.find(tile => tile.kind === "landmark" && !tile.building);
-      const canUseLot = (tile: Tile) => tile.group.visible && tile.kind === "empty"
-        && !this.pathTiles.has(this.key(tile.x, tile.z))
-        && !this.actorTiles.has(this.key(tile.x, tile.z))
-        && (!hearthTile || Math.abs(tile.x - hearthTile.x) + Math.abs(tile.z - hearthTile.z) > 1)
-        && this.accessNeighbors(tile).some(neighbor => neighbor.tile?.group.visible && !neighbor.tile.building && (neighbor.tile.kind === "empty" || this.pathTiles.has(this.key(neighbor.tile.x, neighbor.tile.z))));
-      let available = this.tiles.filter(canUseLot);
-      if (!available.length && this.activeRadius < 15.5) {
+      let tile = this.chooseLot(kind);
+      if (!tile && this.activeRadius < 15.5) {
         this.expandPlot();
-        available = this.tiles.filter(canUseLot);
+        tile = this.chooseLot(kind);
       }
-      if (!available.length) return;
-      const occupied = this.tiles.filter(tile => (tile.building && tile.kind !== "fire") || tile === hearthTile);
-      const near = available.filter(tile => !occupied.length || occupied.some(other => Math.abs(tile.x - other.x) + Math.abs(tile.z - other.z) <= 3));
-      const pool = (near.length ? near : available).filter(tile => this.findAccessPlan(tile));
-      if (!pool.length) return;
-      const tile = pool[Math.floor(this.random() * pool.length)];
+      if (!tile) return;
       for (const tree of tile.trees) tile.group.remove(tree);
       tile.trees = [];
       const built = kind === "house" ? this.makeHouse(tile, immediate) : this.makeLandmark(tile, immediate);
@@ -997,6 +1140,7 @@ export class ChatCity {
       this.focus.copy(tile.group.position);
       this.totalBuildings++;
       if (this.technologyEra <= 1 && this.totalBuildings % 2 === 0) this.addAnimal(tile);
+      else this.tendBackyard(tile);
       this.streetsDirty = true;
     }
     this.tryRenewDistrict();
@@ -1026,10 +1170,14 @@ export class ChatCity {
   disaster(intensity: number, historical = false, damageCount?: number, durationMs = 3600, kind: AttackKind = "fire") {
     const occupied = this.tiles.filter(tile => tile.building && (tile.kind === "house" || tile.kind === "landmark"));
     const count = Math.min(occupied.length, Math.max(1, damageCount ?? Math.ceil(intensity * 2.4)));
-    const seed = occupied[Math.floor(this.random() * occupied.length)];
+    // Trouble arrives from outside: outskirts homes are hit first, landmarks last.
+    const hearth = this.hearthTile;
+    const exposure = (tile: Tile) => (hearth ? Math.hypot(tile.x - hearth.x, tile.z - hearth.z) : 0) + this.random() * 3 - (tile.kind === "landmark" ? 4 : 0) - (tile.burningUntil ? 99 : 0);
+    const seed = occupied.reduce<Tile | undefined>((best, tile) => !best || exposure(tile) > exposure(best) ? tile : best, undefined);
     const damageNoise = new Map(occupied.map(tile => [tile, this.random()]));
+    const candidates = occupied.filter(tile => tile.building?.userData.collapse === undefined && tile.kind !== "fire");
     const damageSet = seed
-      ? occupied.sort((a, b) => {
+      ? candidates.sort((a, b) => {
           const distanceA = Math.abs(a.x - seed.x) + Math.abs(a.z - seed.z) + (damageNoise.get(a) ?? 0) * 0.25;
           const distanceB = Math.abs(b.x - seed.x) + Math.abs(b.z - seed.z) + (damageNoise.get(b) ?? 0) * 0.25;
           return distanceA - distanceB;
@@ -1041,20 +1189,22 @@ export class ChatCity {
     }
     const target = seed.group.position.clone();
     this.focus.copy(target);
-    this.life.panic(target, 3.2, 6);
+    this.life.panic(target, 1.6 + count * 0.6, 4);
+    const scale = Math.min(1, 0.45 + count * 0.2);
     const ignite = (tile: Tile) => {
       if (!tile.building || tile.kind === "fire") return;
       tile.kind = "fire"; tile.burningUntil = performance.now() + durationMs; this.addFlames(tile);
     };
-    if (kind === "meteor") this.meteorStrike(target, () => { damageSet.forEach(ignite); this.shake = 0.6; });
-    else if (kind === "storm") this.lightningStorm(target, damageSet, ignite);
-    else if (kind === "swarm") this.locustSwarm(target, damageSet);
+    if (kind === "meteor") this.meteorStrike(target, () => { damageSet.forEach(ignite); this.shake = 0.3 + scale * 0.3; }, scale);
+    else if (kind === "storm") this.lightningStorm(target, damageSet, ignite, scale);
+    else if (kind === "swarm") this.locustSwarm(target, damageSet, scale);
     else damageSet.forEach(ignite);
   }
 
   /** A glowing rock streaks in, then the impact sets the district alight. */
-  private meteorStrike(target: Vector3, onImpact: () => void) {
+  private meteorStrike(target: Vector3, onImpact: () => void, scale = 1) {
     const rock = new Group();
+    rock.scale.setScalar(scale);
     const core = new Mesh(new IcosahedronGeometry(0.45, 1), mat(0x4a3428, 0.9, { emissive: 0xff5a1f, emissiveIntensity: 1.4 }));
     const glow = new Mesh(new SphereGeometry(0.7, 12, 8), new MeshStandardMaterial({ color: 0xffa040, emissive: 0xff7a22, emissiveIntensity: 2, transparent: true, opacity: 0.45 }));
     rock.add(core, glow);
@@ -1071,11 +1221,11 @@ export class ChatCity {
       if (t < 1) return false;
       this.root.remove(rock);
       disposeObject(rock);
-      for (let i = 0; i < 46; i++) {
+      for (let i = 0; i < Math.round(46 * scale); i++) {
         const color = [0xff7a22, 0xffc04d, 0x5a4a3a, 0x8a7a6a][i % 4];
         this.puff(target.clone().setY(0.3), color, 0.06 + this.random() * 0.08, 0.7 + this.random() * 0.8, new Vector3((this.random() - 0.5) * 6, 2 + this.random() * 4, (this.random() - 0.5) * 6), 6);
       }
-      const crater = new Mesh(new CylinderGeometry(0.9, 1.05, 0.02, 18), mat(0x2b2420, 1));
+      const crater = new Mesh(new CylinderGeometry(0.9 * scale, 1.05 * scale, 0.02, 18), mat(0x2b2420, 1));
       crater.position.copy(target).setY(0.03);
       this.root.add(crater);
       let fade = 0;
@@ -1086,8 +1236,9 @@ export class ChatCity {
   }
 
   /** A dark cloud rolls over and lightning picks off buildings one strike at a time. */
-  private lightningStorm(target: Vector3, damage: Tile[], ignite: (tile: Tile) => void) {
+  private lightningStorm(target: Vector3, damage: Tile[], ignite: (tile: Tile) => void, scale = 1) {
     const cloud = new Group();
+    cloud.scale.setScalar(0.5 + scale * 0.5);
     const cloudMat = new MeshStandardMaterial({ color: 0x3a4250, roughness: 1, transparent: true, opacity: 0 });
     for (let i = 0; i < 9; i++) {
       const puff = new Mesh(new SphereGeometry(0.9 + this.random() * 0.6, 10, 8), cloudMat);
@@ -1097,29 +1248,29 @@ export class ChatCity {
     }
     cloud.position.copy(target).setY(6.2);
     this.root.add(cloud);
-    const flash = new PointLight(0xc8d8ff, 0, 18, 1.5);
-    flash.position.copy(target).setY(5);
-    this.root.add(flash);
+    const flash = this.claimLight(0xc8d8ff, 18, 1.5, target.clone().setY(5));
     let t = 0;
     const queue = [...damage];
-    let nextStrike = 0.9;
+    let nextStrike = 0.6;
+    const lifetime = 2.4 + queue.length * 0.6;
     this.effects.push(delta => {
       t += delta;
-      cloudMat.opacity = Math.min(0.92, t * 1.2) * (t > 4.2 ? Math.max(0, 1 - (t - 4.2)) : 1);
+      cloudMat.opacity = Math.min(0.92, t * 1.6) * (t > lifetime - 1 ? Math.max(0, lifetime - t) : 1);
       cloud.position.x += Math.sin(t * 0.8) * delta * 0.3;
-      flash.intensity *= Math.exp(-delta * 14);
+      if (flash) flash.intensity *= Math.exp(-delta * 14);
       for (let i = 0; i < 3; i++) this.puff(cloud.position.clone().add(new Vector3((this.random() - 0.5) * 3.4, -0.4, (this.random() - 0.5) * 2.4)), 0x9fb6d8, 0.025, 0.6, new Vector3(0, -9, 0), 0);
       if (t >= nextStrike && queue.length) {
         const tile = queue.shift()!;
         nextStrike = t + 0.35 + this.random() * 0.35;
         this.bolt(cloud.position.clone().setY(5.8), tile.group.position.clone().setY(0.6));
-        flash.intensity = 30;
+        if (flash) flash.intensity = 30;
         this.shake = Math.max(this.shake, 0.25);
         ignite(tile);
       }
-      if (t < 5.2) return false;
-      this.root.remove(cloud); this.root.remove(flash);
-      disposeObject(cloud); cloudMat.dispose(); flash.dispose();
+      if (t < lifetime) return false;
+      this.root.remove(cloud);
+      this.releaseLight(flash);
+      disposeObject(cloud); cloudMat.dispose();
       return true;
     });
   }
@@ -1151,12 +1302,12 @@ export class ChatCity {
   }
 
   /** A buzzing swarm sweeps in and gnaws buildings down to rubble. */
-  private locustSwarm(target: Vector3, damage: Tile[]) {
+  private locustSwarm(target: Vector3, damage: Tile[], scale = 1) {
     const bugs: Mesh[] = [];
     const bugMat = mat(0x2a2a1e, 0.8);
     const geometry = new BoxGeometry(0.05, 0.03, 0.08);
     const entry = target.clone().add(new Vector3(this.activeRadius + 4, 1.6, -this.activeRadius));
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < Math.round(90 * scale); i++) {
       const bug = new Mesh(geometry, bugMat);
       bug.position.copy(entry).add(new Vector3((this.random() - 0.5) * 2, (this.random() - 0.5) * 1, (this.random() - 0.5) * 2));
       bug.userData.phase = this.random() * Math.PI * 2;
@@ -1166,11 +1317,12 @@ export class ChatCity {
     }
     let t = 0;
     const center = new Vector3();
-    damage.forEach((tile, index) => { if (tile.building) tile.building.userData.gnawAt = 1.6 + index * 0.45; });
+    damage.forEach((tile, index) => { if (tile.building) tile.building.userData.gnawAt = 1.5 + index * 0.4; });
+    const leaveAt = 2.4 + damage.length * 0.4;
     this.effects.push(delta => {
       t += delta;
       const arrive = Math.min(1, t / 1.4);
-      const leaving = t > 4.6 ? (t - 4.6) / 1.2 : 0;
+      const leaving = t > leaveAt ? (t - leaveAt) / 1.2 : 0;
       center.lerpVectors(entry, target.clone().setY(0.9), arrive * arrive * (3 - 2 * arrive));
       if (leaving) center.add(new Vector3(-leaving * 10, leaving * 6, leaving * 8));
       for (const bug of bugs) {
@@ -1185,20 +1337,20 @@ export class ChatCity {
         building.userData.gnawAt = undefined;
         building.userData.collapse = 0;
       }
-      if (t < 5.8) return false;
+      if (t < leaveAt + 1.2) return false;
       for (const bug of bugs) this.root.remove(bug);
       geometry.dispose();
       return true;
     });
   }
 
-  private puff(at: Vector3, color: number, size: number, life: number, velocity: Vector3, gravity = 1.5) {
-    if (this.particles.length > 600) return;
-    const mesh = new Mesh(new SphereGeometry(size, 5, 4), mat(color, 0.6, { emissive: color, emissiveIntensity: 0.6 }));
-    mesh.position.copy(at);
-    this.root.add(mesh);
-    this.particles.push({ mesh, velocity, life, maxLife: life, gravity, drag: 1.2 });
+  private puff(at: Vector3, color: number, size: number, life: number, velocity: Vector3, gravity = 1.5, dull = false) {
+    if (this.particles.length >= MAX_PARTICLES) return;
+    const tint = new Color(color);
+    if (dull) tint.multiplyScalar(0.75);
+    this.particles.push({ position: at.clone(), velocity, size: size * 1.6, color: tint, life, maxLife: life, gravity, drag: 1.2 });
   }
+
 
   private addFlames(tile: Tile) {
     const flames = new Group();
@@ -1208,27 +1360,26 @@ export class ChatCity {
       flame.userData.phase = this.random() * Math.PI * 2;
       flames.add(flame);
     }
-    const light = new PointLight(0xff6a32, 1.8, 3.2, 2);
-    light.position.y = 1.1;
-    flames.add(light);
+    flames.userData.keep = true;
     tile.building?.add(flames);
-    if (tile.building) tile.building.userData.flames = flames;
+    if (tile.building) {
+      tile.building.userData.flames = flames;
+      tile.building.userData.light = this.claimLight(0xff6a32, 3.2, 2, tile.group.position.clone().setY(1.1));
+    }
   }
 
   fireworks(x: number, z: number, intensity: number) {
     const origin = new Vector3(x, 2.2, z);
     const colorList = [0xffcb6b, 0xe98770, 0x89d4c5, 0x99b9e6, 0xf1e6c4];
     const amount = Math.min(70, Math.max(18, Math.round(24 * intensity)));
-    for (let i = 0; i < amount; i++) {
-      const color = colorList[Math.floor(this.random() * colorList.length)];
-      const mesh = new Mesh(new SphereGeometry(0.045 + this.random() * 0.03, 6, 6), mat(color, 0.24, { emissive: color, emissiveIntensity: 1.8 }));
-      mesh.position.copy(origin);
-      this.scene.add(mesh);
+    for (let i = 0; i < amount && this.particles.length < MAX_PARTICLES; i++) {
+      const color = new Color(colorList[Math.floor(this.random() * colorList.length)]).multiplyScalar(1.4);
       const velocity = new Vector3((this.random() - 0.5) * 4.2, this.random() * 3 + 1.6, (this.random() - 0.5) * 4.2);
       const life = 0.8 + this.random() * 0.8;
-      this.particles.push({ mesh, velocity, life, maxLife: life, gravity: 4.2 });
+      this.particles.push({ position: origin.clone(), velocity, size: 0.09 + this.random() * 0.05, color, life, maxLife: life, gravity: 4.2 });
     }
   }
+
 
   apply(event: SimEvent, historical = false) {
     if (event.type === "advancement") this.unlockTechnology(event.era);
@@ -1251,21 +1402,32 @@ export class ChatCity {
       const building = tile.building;
       if (!building) continue;
       if (building.userData.collapse !== undefined) {
-        building.userData.collapse += delta;
+        // Demolition is construction in reverse: the building steps down in chunky pixel layers.
+        const before = building.userData.collapse as number;
+        building.userData.collapse = before + delta;
         const c = building.userData.collapse as number;
-        building.scale.y = Math.max(0.05, 1 - c * 1.3);
-        building.rotation.z = Math.sin(c * 40) * 0.04;
-        if (this.random() < 0.5) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.8, 0.2, (this.random() - 0.5) * 0.8)), 0x9a8a72, 0.08, 0.9, new Vector3((this.random() - 0.5) * 0.6, 0.6, (this.random() - 0.5) * 0.6), 0.3);
-        if (c > 0.75) this.destroyBuilding(tile);
+        const steps = ChatCity.BUILD_STEPS;
+        const step = Math.min(steps, Math.floor((c / ChatCity.UNBUILD_SECONDS) * steps));
+        if (step > Math.floor((before / ChatCity.UNBUILD_SECONDS) * steps)) {
+          for (let i = 0; i < 5; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.8, 0.15 + (1 - step / steps) * 0.6, (this.random() - 0.5) * 0.8)), [0x9a8a72, 0x6b5f50, 0xb8a888][i % 3], 0.07, 0.8, new Vector3((this.random() - 0.5) * 1.2, 0.9, (this.random() - 0.5) * 1.2), 1.2, true);
+          building.position.x = (this.random() - 0.5) * 0.05;
+        }
+        building.scale.y = Math.max(0.04, 1 - step / steps);
+        if (step >= steps) this.destroyBuilding(tile);
         continue;
       }
       const elapsed = (building.userData.buildElapsed ?? 0) + delta;
       building.userData.buildElapsed = elapsed;
-    const progress = Math.min(1, elapsed / 0.82);
-      const eased = progress < 1 ? 1 - Math.pow(1 - progress, 4) : 1;
-      const bounce = progress < 1 ? 0.065 * Math.sin(progress * Math.PI) * (1 - progress) : 0;
-      building.scale.y = 0.02 + eased * 0.98 + bounce;
-      building.position.y = (1 - building.scale.y) * 0.5;
+      const progress = Math.min(1, elapsed / 0.82);
+      if (progress < 1 || !building.userData.settled) {
+        // Builds stack up in the same chunky steps as demolition, then land with a little bounce.
+        const eased = 1 - Math.pow(1 - progress, 2);
+        const stepped = Math.max(1, Math.ceil(eased * ChatCity.BUILD_STEPS)) / ChatCity.BUILD_STEPS;
+        const settle = progress >= 1 ? Math.max(0, 1 - (elapsed - 0.82) / 0.25) : 0;
+        building.scale.y = stepped + Math.sin(settle * Math.PI) * 0.06;
+        building.position.y = 0;
+        if (progress >= 1 && settle <= 0) { building.userData.settled = true; building.scale.y = 1; }
+      }
 
       const hearth = building.userData.hearth as Group | undefined;
       hearth?.children.forEach(child => {
@@ -1280,15 +1442,18 @@ export class ChatCity {
           if (child instanceof Mesh) {
             const phase = (child.userData.phase as number) + performance.now() * 0.008;
             child.scale.set(0.8 + Math.sin(phase) * 0.25, 0.78 + Math.sin(phase * 1.3) * 0.38, 0.8 + Math.cos(phase) * 0.2);
-          } else if (child instanceof PointLight) child.intensity = 1.55 + 0.45 * Math.sin(performance.now() * 0.012);
+          }
         });
-        if (tile.burningUntil && performance.now() >= tile.burningUntil) this.destroyBuilding(tile);
+        const light = building.userData.light as PointLight | undefined;
+        if (light) light.intensity = 1.55 + 0.45 * Math.sin(performance.now() * 0.012 + tile.x);
+        if (tile.burningUntil && performance.now() >= tile.burningUntil && building.userData.collapse === undefined) building.userData.collapse = 0;
       }
     }
   }
 
   private destroyBuilding(tile: Tile) {
     if (tile.building) {
+      this.releaseLight(tile.building.userData.light as PointLight | undefined);
       tile.group.remove(tile.building);
       disposeObject(tile.building);
       tile.building = undefined;
@@ -1300,21 +1465,30 @@ export class ChatCity {
   }
 
   private updateParticles(delta: number) {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const particle = this.particles[i];
+    const mesh = this.particleMesh;
+    const dummy = this.particleDummy;
+    let write = 0;
+    for (const particle of this.particles) {
       particle.life -= delta;
+      if (particle.life <= 0) continue;
       particle.velocity.y -= particle.gravity * delta;
       if (particle.drag) particle.velocity.multiplyScalar(Math.exp(-particle.drag * delta));
-      particle.mesh.position.addScaledVector(particle.velocity, delta);
-      const alpha = Math.max(0, particle.life / particle.maxLife);
-      particle.mesh.scale.setScalar(alpha);
-      if (particle.life <= 0) {
-        particle.mesh.removeFromParent();
-        disposeObject(particle.mesh);
-        this.particles.splice(i, 1);
-      }
+      particle.position.addScaledVector(particle.velocity, delta);
+      // Shrink in hard steps so particles blink out like sprites instead of fading smoothly.
+      const steps = Math.ceil((particle.life / particle.maxLife) * 4) / 4;
+      dummy.position.copy(particle.position);
+      dummy.scale.setScalar(particle.size * steps);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(write, dummy.matrix);
+      mesh.setColorAt(write, particle.color);
+      this.particles[write++] = particle;
     }
+    this.particles.length = write;
+    mesh.count = write;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+
 
   private animate = () => {
     if (this.destroyed) return;

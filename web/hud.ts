@@ -41,7 +41,7 @@ export class CityHud {
   private bannerLayer = el("div", "banner-layer");
   private shownTotal = 0;
   private targetTotal = 0;
-  private popQueue: Array<{ label: string; points: number }> = [];
+  private popQueue: Array<{ label: string; points: number; unit?: string }> = [];
   private lastPopAt = 0;
   private live = 0;
 
@@ -112,8 +112,13 @@ export class CityHud {
 
   event(event: SimEvent) {
     if (event.type === "disaster") {
-      this.banner(`!! ${event.reason ?? ATTACK_VERB[event.kind] ?? "ATTACK"} !!`, "attack");
-      document.body.classList.remove("quake"); void document.body.offsetWidth; document.body.classList.add("quake");
+      // Small destruction pulses pop out of the city like build points; only big hits get a banner.
+      const lost = event.damageCount ?? 1;
+      this.popQueue.unshift({ label: `${ATTACK_VERB[event.kind] ?? "ATTACK"} · ${event.reason ?? ""}`.trim(), points: -lost, unit: lost === 1 ? "HOME" : "HOMES" });
+      if (lost >= 3 || event.reason === "HATE") {
+        this.banner(`!! ${event.reason ?? ATTACK_VERB[event.kind] ?? "ATTACK"} !!`, "attack");
+        document.body.classList.remove("quake"); void document.body.offsetWidth; document.body.classList.add("quake");
+      }
     } else if (event.type === "advancement") this.banner(`NEW ERA · ${event.name}`, "era");
     else if (event.type === "boom") this.banner(`RAID! +${event.viewers} BUILDERS`, "raid");
   }
@@ -124,10 +129,10 @@ export class CityHud {
     setTimeout(() => banner.remove(), 3400);
   }
 
-  private spawnPop(pop: { label: string; points: number }) {
+  private spawnPop(pop: { label: string; points: number; unit?: string }) {
     const anchor = this.options.screenPoint();
-    const node = el("div", `pop ${pop.points >= 0 ? "pop-plus" : "pop-minus"}`);
-    node.append(el("span", "pop-points", `${pop.points >= 0 ? "+" : ""}${pop.points}`), el("span", "pop-label", pop.label));
+    const node = el("div", `pop ${pop.points >= 0 ? "pop-plus" : "pop-minus"}${pop.unit ? " pop-wreck" : ""}`);
+    node.append(el("span", "pop-points", `${pop.points >= 0 ? "+" : ""}${pop.points}${pop.unit ? ` ${pop.unit}` : ""}`), el("span", "pop-label", pop.label));
     const spread = this.options.overlay ? 70 : 120;
     const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
     node.style.left = `${clamp(anchor.x + (Math.random() - 0.5) * spread * 2, 90, innerWidth - 90)}px`;

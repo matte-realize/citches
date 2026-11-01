@@ -31,15 +31,18 @@ export const config = {
     memoryMs: 20_000
   },
   threat: {
-    /** Minus points needed to trigger an attack, and how quickly danger fades on its own. */
-    threshold: 12, decayPerSecond: 0.3, positiveDefense: 0.3,
-    cooldownMs: 18_000, carryOver: 0.2, maxIntensity: 6,
+    /**
+     * Destruction mirrors construction: minus points fill the danger meter, and each time it
+     * fills a building is knocked down, in paced pulses just like build pulses.
+     */
+    destroyThreshold: 4, maxDestroysPerPulse: 2, cooldownMs: 2600,
+    decayPerSecond: 0.12, positiveDefense: 0.22,
     technologyPenalty: 0.35
   },
   spam: { emoteRatio: 0.6, repeatedCharacterLength: 5, maxShortMessageLength: 4, shortRepeatMinimum: 3 },
   events: {
     rateReference: 4, countMultiplier: 1, intensityMultiplier: 1,
-    raidMinimumViewers: 1, disasterThreshold: 2, fireworksThreshold: 2.5,
+    raidMinimumViewers: 1, disasterThreshold: 2, fireworksThreshold: 2.5, fireworksCooldownMs: 6000,
     destroyedBuildingsPerIntensity: 2.4, burnDurationMs: 3500
   },
   growth: {

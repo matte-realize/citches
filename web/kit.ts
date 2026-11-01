@@ -1,5 +1,6 @@
 import { BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, SphereGeometry } from "three";
 import type { BufferGeometry as Geometry, ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 /** Shared materials and geometry are flagged so disposal of one building never breaks another. */
 const materialCache = new Map<string, MeshStandardMaterial>();
@@ -114,4 +115,52 @@ export function tint(color: number, random: () => number, hue = 0.02, light = 0.
   const result = new Color(color);
   result.offsetHSL((random() - 0.5) * hue, (random() - 0.5) * 0.08, (random() - 0.5) * light);
   return result.getHex();
+}
+
+/**
+ * Merge a finished building's static meshes into one mesh per material. Buildings are built from
+ * dozens of small parts; baking them cuts draw calls (and shadow passes) by an order of magnitude.
+ * Objects flagged `userData.keep` (animated flames, hearths) are left untouched.
+ */
+export function bakeStatic(root: Object3D) {
+  root.updateMatrixWorld(true);
+  const inverse = new Matrix4().copy(root.matrixWorld).invert();
+  const groups = new Map<string, { material: Material; geometries: Geometry[]; shadow: boolean }>();
+  const remove: Mesh[] = [];
+  const visit = (object: Object3D) => {
+    if (object.userData.keep) return;
+    if (object instanceof Mesh && !(object instanceof InstancedMesh) && !Array.isArray(object.material)) {
+      const source = object.geometry as Geometry;
+      const geometry: Geometry = source.index ? source.toNonIndexed() : source.clone();
+      for (const name of Object.keys(geometry.attributes)) if (name !== "position" && name !== "normal") geometry.deleteAttribute(name);
+      if (!geometry.attributes.normal) geometry.computeVertexNormals();
+      geometry.applyMatrix4(new Matrix4().multiplyMatrices(inverse, object.matrixWorld));
+      const key = object.material.uuid;
+      const entry = groups.get(key) ?? { material: object.material as Material, geometries: [] as Geometry[], shadow: false };
+      entry.geometries.push(geometry);
+      entry.shadow ||= object.castShadow;
+      groups.set(key, entry);
+      remove.push(object);
+    }
+    for (const child of object.children) visit(child);
+  };
+  visit(root);
+  if (remove.length < 4) { for (const entry of groups.values()) entry.geometries.forEach(g => g.dispose()); return; }
+  for (const mesh of remove) {
+    mesh.removeFromParent();
+    if (!mesh.geometry.userData.shared) mesh.geometry.dispose();
+  }
+  for (const { material, geometries, shadow } of groups.values()) {
+    const merged = mergeGeometries(geometries, false);
+    geometries.forEach(g => g.dispose());
+    if (!merged) continue;
+    const mesh = new Mesh(merged, material);
+    mesh.castShadow = shadow;
+    mesh.receiveShadow = true;
+    root.add(mesh);
+  }
+  // Empty helper groups left behind are harmless; drop them to keep traversal cheap.
+  const empty: Object3D[] = [];
+  root.traverse(object => { if (object !== root && object.type === "Group" && object.children.length === 0 && !object.userData.keep) empty.push(object); });
+  empty.forEach(object => object.removeFromParent());
 }

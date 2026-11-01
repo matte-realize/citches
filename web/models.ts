@@ -71,6 +71,9 @@ export function makePerson(random: Random, era: number, themeId: CityThemeId, th
   const armL = limb(-0.088, 0.375, 0.16, 0.022, cloth, skin);
   const armR = limb(0.088, 0.375, 0.16, 0.022, cloth, skin);
   armL.rotation.z = -0.12; armR.rotation.z = 0.12;
+  // Only the torso casts a shadow: tiny limb shadows cost draw calls and are invisible at this scale.
+  root.traverse(object => { object.castShadow = false; });
+  body.children[0].castShadow = true;
   return { root, body, head, legL, legR, armL, armR, height: 0.5 * scale };
 }
 
