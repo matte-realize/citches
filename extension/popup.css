@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 :root { --ink: #10141c; --panel: #1b2433; --panel-hi: #2a3850; --text: #f4ecd8; --muted: #a9b7c6; --gold: #ffd35a; --gold-deep: #b7791f; }
 * { box-sizing: border-box; }
 body { margin: 0; width: 300px; background: var(--panel); color: var(--text); font-family: "Pixelify Sans", monospace; -webkit-font-smoothing: none; }

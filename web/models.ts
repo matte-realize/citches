@@ -94,7 +94,7 @@ export function makePerson(random: Random, era: number, themeId: CityThemeId, th
   return { root, body, head, legL, legR, armL, armR, height: 0.5 * scale };
 }
 
-export type PersonPose = "walk" | "idle" | "talk" | "sit" | "wave" | "cheer" | "panic";
+export type PersonPose = "walk" | "idle" | "talk" | "sit" | "wave" | "cheer" | "panic" | "sleep";
 export function posePerson(rig: PersonRig, pose: PersonPose, phase: number, stride = 1) {
   const s = Math.sin(phase);
   let legL = 0, legR = 0, armL = 0, armR = 0, armLz = -0.12, armRz = 0.12, bob = 0, lean = 0, headYaw = 0, headPitch = 0;
@@ -122,6 +122,14 @@ export function posePerson(rig: PersonRig, pose: PersonPose, phase: number, stri
     armL = armR = -0.55 + Math.sin(phase * 0.8) * 0.08;
     armRz = 0.2 + Math.max(0, Math.sin(phase * 0.7)) * 0.35;
     headYaw = Math.sin(phase * 0.3) * 0.35;
+  } else if (pose === "sleep") {
+    // Slumped by the fire, head nodding, slow breathing.
+    legL = legR = -1.4;
+    bob = -0.13 + Math.sin(phase * 0.35) * 0.004;
+    lean = 0.28;
+    armL = armR = -0.35;
+    armLz = -0.25; armRz = 0.25;
+    headPitch = 0.6 + Math.sin(phase * 0.35) * 0.05;
   } else if (pose === "wave") {
     armR = -2.7; armRz = 0.4 + Math.sin(phase * 5) * 0.35;
     bob = Math.abs(Math.sin(phase * 2)) * 0.008;

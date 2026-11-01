@@ -38,7 +38,10 @@ const city = new ChatCity(host, themeFromSearch(`?${params}`), {
   transparent: overlay,
   zoom: Number(params.get("zoom")) || (overlay ? 1.25 : 1),
   pixelSize: Number(params.get("pixel")) || 1.5,
-  maxFps: Number(params.get("fps")) || (overlay ? 30 : 60)
+  maxFps: Number(params.get("fps")) || (overlay ? 30 : 60),
+  // Day and night follow the viewer's own clock unless a zone is given (the streamer can pin theirs).
+  timeZone: params.get("tz") ?? broadcaster.timeZone ?? undefined,
+  hour: params.has("hour") ? Number(params.get("hour")) : undefined
 });
 if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) (window as unknown as { chatCity: ChatCity }).chatCity = city;
 const hud = new CityHud({
@@ -91,8 +94,33 @@ const counts = document.querySelector<HTMLDivElement>(".debug-counts");
 const updateStage = () => { if (stage) stage.textContent = `${city.stage} · ${city.themeName} · ${city.landArea} TILES`; };
 updateStage();
 
+// ---------- bedtime ----------
+// The city sleeps when the stream is offline: the backend disconnects, the Twitch page says the
+// channel is offline (browser extension), or chat has been silent for a while.
+const sleepAfterMs = (Number(params.get("sleepAfter")) || 240) * 1000;
+let lastChatAt = performance.now();
+let feedOffline = false;
+let pageOffline = false;
+const forceSleep = params.get("sleep") === "1";
+const updateSleep = () => {
+  const silent = performance.now() - lastChatAt > sleepAfterMs;
+  const asleep = forceSleep || feedOffline || pageOffline || silent;
+  city.setAsleep(asleep);
+  hud.setSleeping(asleep, () => city.sleepyPoints());
+};
+setInterval(updateSleep, 2000);
+addEventListener("message", event => {
+  const data = event.data as { type?: string; live?: boolean } | undefined;
+  if (data?.type === "chat-city:stream" && typeof data.live === "boolean") { pageOffline = !data.live; updateSleep(); }
+});
+
 const onTick = (tick: CityTick) => {
   const replay = Boolean(tick.replay);
+  if (!replay && tick.aggregate && tick.aggregate.messagesPerSecond > 0) {
+    const wasSilent = performance.now() - lastChatAt > sleepAfterMs;
+    lastChatAt = performance.now();
+    if (wasSilent) updateSleep();
+  }
   if (tick.progress) {
     hud.setProgress(tick.progress);
     city.setCommunityProgress(tick.progress.recovery);
@@ -116,5 +144,11 @@ const feed: CityFeed = extension ? new TwitchExtensionFeed(params.get("ebs") ?? 
   : chatChannel ? new TwitchChatFeed(chatChannel)
   : params.has("demo") ? new DemoFeed(Number(params.get("demo")) || 1)
   : new WebSocketFeed(`${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}:${wsPort}`);
-feed.start(onTick, text => { status.textContent = text; });
+feed.start(onTick, text => {
+  status.textContent = text;
+  feedOffline = /OFFLINE|DISCONNECTED/i.test(text);
+  if (!feedOffline) lastChatAt = performance.now();
+  updateSleep();
+});
+updateSleep();
 window.addEventListener("beforeunload", () => { feed.stop(); city.destroy(); });

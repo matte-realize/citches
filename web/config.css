@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 body.config-page { margin: 0; min-height: 100vh; background: #1b2433; color: #f4ecd8; font-family: "Pixelify Sans", ui-monospace, monospace; -webkit-font-smoothing: none; }
 .config { max-width: 460px; padding: 24px 20px 40px; }
 .config h1 { margin: 0 0 8px; font: 16px "Press Start 2P", monospace; color: #ffd35a; text-shadow: 2px 2px 0 #b7791f, 4px 4px 0 #10141c; }

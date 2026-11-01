@@ -46,6 +46,12 @@ npm run calibrate -- logs/xqc-*.jsonl
 
 `calibrate` replays real chat logs through the same pipeline on message time (hours in seconds) and checks attack spacing, attack size, the worst minute, whether the city keeps growing, and losses per build against `config.calibration`. Live mode records every chat it reads into `logs/`, so the check gets better the more streams it has seen. Retune `config.threat` and rerun until all targets are met.
 
+## Day, night and bedtime
+
+The sun follows the local time: it rises in the east, arcs over the city (shadows move with it) and sets in the west, through pink dawns and orange dusks, with a moonlit night in between. Windows, street lamps and neon glow at night and fade by day, and fewer villagers and cars are out late. By default every viewer sees their own time of day; on Twitch the streamer can instead pin their own time zone on the configuration page. `?tz=Europe/Paris` follows a zone and `?hour=19` pins the time for demos.
+
+When the stream goes offline the city goes to bed. Walkers head home and go inside, cars park and disappear, the villagers by the campfire nod off while it burns down to embers, sheep lie down, most lights go out and Z's drift up from the homes. When chat returns, everyone wakes with a "GOOD MORNING!". Offline is detected from the backend disconnecting, from the Twitch page (browser extension), or from chat being silent for four minutes (`?sleepAfter=` in seconds). `?sleep=1` forces bedtime for testing.
+
 ## Town planning
 
 The plot is laid out in planned blocks: streets run every four tiles, so each block is eight street-facing lots around a backyard tile (trees, vegetable plots or a sheep paddock). The founding campfire sits in the central block as an open plaza. New homes go to the best lot: infill on streets that already exist first, then compact growth outward, finishing partly built blocks before starting new ones; landmarks prefer corner lots. Every home's front door faces its street.

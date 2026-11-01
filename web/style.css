@@ -15,6 +15,8 @@
   --chunky: "Press Start 2P", ui-monospace, monospace;
 }
 * { box-sizing: border-box; }
+/* Components set their own display; make sure the hidden attribute still wins. */
+[hidden] { display: none !important; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #111f2a; font-family: var(--pixel); color: var(--text); -webkit-font-smoothing: none; font-smooth: never; }
 .city-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; }
 
@@ -114,6 +116,13 @@ html.overlay .score-total { font-size: 18px; }
 .pop-wreck .pop-points { font-size: 18px; }
 .pop-credit { color: var(--gold); text-shadow: 2px 2px 0 var(--gold-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); }
 .pop-credit .pop-label { font-size: 16px; color: var(--text); }
+
+/* Bedtime. */
+.sleep-sign { display: flex; align-items: center; gap: 8px; margin: -2px 0 9px; padding: 5px 8px; background: #121a28; box-shadow: 0 0 0 2px var(--ink); font-family: var(--chunky); font-size: 8px; color: #b8c8ff; letter-spacing: .04em; }
+.sleep-moon { font-family: var(--pixel); font-size: 14px; color: #ffe9a8; animation: bob 2.4s ease-in-out infinite; }
+.zzz { position: absolute; font-family: var(--chunky); font-size: 12px; color: #dfe8ff; text-shadow: 2px 2px 0 var(--ink); animation: zzz-float 3s ease-out forwards; }
+@keyframes zzz-float { 0% { opacity: 0; transform: translate(0, 0) scale(.6); } 15% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--drift), -60px) scale(1.4); } }
+body.city-asleep .score-total { color: #b8c8ff; text-shadow: 3px 3px 0 #4a5a8a, 5px 5px 0 var(--ink); }
 
 /* Villagers repeating wholesome chat. */
 .speech {

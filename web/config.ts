@@ -23,6 +23,7 @@ root.innerHTML = `
     <div class="field"><span>Corner</span><div data-field="corner"></div></div>
     <div class="field"><span>Size</span><div data-field="size"></div></div>
   </div>
+  <div class="field"><span>Day and night follow</span><div data-field="timeZone"></div></div>
   <label class="field"><span>Backend address <small>(so viewers who join late see the same city)</small></span>
     <input name="ebsUrl" type="url" placeholder="https://your-backend.example.com" spellcheck="false"></label>
   <button class="save" type="button">Save</button>
@@ -32,6 +33,12 @@ const mount = (name: string, element: HTMLElement) => root.querySelector(`[data-
 mount("theme", pixelSelect(themeOptions(), config.theme!, value => { config.theme = value; }, "Civilization"));
 mount("corner", pixelSelect([{ value: "br", label: "Bottom right" }, { value: "bl", label: "Bottom left" }], config.corner!, value => { config.corner = value as "br" | "bl"; }, "Corner"));
 mount("size", pixelSelect([{ value: "small", label: "Small" }, { value: "medium", label: "Medium" }, { value: "large", label: "Large" }], config.size!, value => { config.size = value as BroadcasterConfig["size"]; }, "Size"));
+// Either every viewer sees their own local time of day, or everyone sees the streamer's.
+const myZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+mount("timeZone", pixelSelect([
+  { value: "viewer", label: "Each viewer's own time", hint: "Night falls when it is night for them" },
+  { value: myZone, label: `My time (${myZone.replace(/_/g, " ")})`, hint: "Everyone shares your sunrise and sunset" }
+], config.timeZone ?? "viewer", value => { config.timeZone = value === "viewer" ? undefined : value; }, "Day and night"));
 const ebsInput = root.querySelector<HTMLInputElement>('[name="ebsUrl"]')!;
 ebsInput.value = config.ebsUrl ?? "";
 const status = root.querySelector<HTMLElement>(".status")!;

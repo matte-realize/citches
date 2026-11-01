@@ -46,6 +46,8 @@ export class CityHud {
   private recovery = el("div", "recovery-row");
   private leaders = el("div", "leaders-row");
   private lastBubbleAt = 0;
+  private sleepSign = el("div", "sleep-sign");
+  private zTimer?: ReturnType<typeof setInterval>;
   private popLayer = el("div", "pop-layer");
   private bannerLayer = el("div", "banner-layer");
   private shownTotal = 0;
@@ -69,6 +71,9 @@ export class CityHud {
     this.recovery.hidden = true;
     this.leaders.hidden = true;
     board.append(scoreRow, eraRow, dangerRow, this.leaders, this.recovery);
+    this.sleepSign.hidden = true;
+    this.sleepSign.append(el("span", "sleep-moon", "☾"), el("span", "sleep-text", "STREAM OFFLINE · THE CITY IS SLEEPING"));
+    board.prepend(this.sleepSign);
     this.root.append(this.popLayer, this.bannerLayer, board);
     document.body.appendChild(this.root);
     requestAnimationFrame(this.tick);
@@ -128,6 +133,27 @@ export class CityHud {
     const recovery = progress.recovery;
     this.recovery.hidden = !recovery.active;
     if (recovery.active) this.recovery.textContent = `REBUILDING ${Math.round(recovery.ratio * 100)}% · ${ERA_NAMES[recovery.era] ?? ""} HOMES`;
+  }
+
+  /** Lights-out: show the sleeping sign and let Z's drift up from homes until the city wakes. */
+  setSleeping(sleeping: boolean, points: () => Array<{ x: number; y: number }>) {
+    if (sleeping === !this.sleepSign.hidden) return;
+    this.sleepSign.hidden = !sleeping;
+    document.body.classList.toggle("city-asleep", sleeping);
+    if (this.zTimer) clearInterval(this.zTimer);
+    this.zTimer = undefined;
+    if (sleeping) {
+      this.zTimer = setInterval(() => {
+        for (const point of points()) {
+          const z = el("div", "zzz", Math.random() < 0.5 ? "z" : "Z");
+          z.style.left = `${point.x + (Math.random() - 0.5) * 20}px`;
+          z.style.top = `${point.y}px`;
+          z.style.setProperty("--drift", `${(Math.random() - 0.3) * 40}px`);
+          this.popLayer.appendChild(z);
+          setTimeout(() => z.remove(), 3000);
+        }
+      }, 1400);
+    } else this.banner("GOOD MORNING!", "era");
   }
 
   /** A villager repeats a wholesome chat message in a pixel speech bubble. */

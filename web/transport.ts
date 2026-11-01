@@ -29,7 +29,7 @@ type TwitchExt = {
 };
 
 /** Settings only the broadcaster can change, stored in Twitch's extension configuration service. */
-export interface BroadcasterConfig { theme?: string; corner?: "br" | "bl"; size?: "small" | "medium" | "large"; ebsUrl?: string }
+export interface BroadcasterConfig { theme?: string; corner?: "br" | "bl"; size?: "small" | "medium" | "large"; ebsUrl?: string; timeZone?: string }
 
 export function readBroadcasterConfig(): BroadcasterConfig {
   try { return JSON.parse(window.Twitch?.ext.configuration.broadcaster?.content ?? "{}") as BroadcasterConfig; } catch { return {}; }

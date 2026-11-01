@@ -1,7 +1,7 @@
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPixelatedPass } from "three/examples/jsm/postprocessing/RenderPixelatedPass.js";
-import { ACESFilmicToneMapping, BasicShadowMap, ShaderMaterial, Box3, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
+import { ACESFilmicToneMapping, BasicShadowMap, ShaderMaterial, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
@@ -9,7 +9,8 @@ import { HomeKit } from "./homes.js";
 import { buildModernLandmark } from "./landmarks.js";
 import { SpecialKit } from "./specials.js";
 import type { Animated } from "./specials.js";
-import { bakeStatic, disposeObject } from "./kit.js";
+import { bakeStatic, disposeObject, scaleSharedGlow } from "./kit.js";
+import { lightingAt, localHour } from "./daycycle.js";
 import { CityLife } from "./life.js";
 import type { Door, NetCell } from "./life.js";
 import { DIRS, buildStreetLayer } from "./streets.js";
@@ -25,7 +26,13 @@ type Particle = { position: Vector3; velocity: Vector3; size: number; color: Col
 const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
 /** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 1.5 = default pixel art). */
-export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number; maxFps?: number }
+export interface CityOptions {
+  transparent?: boolean; zoom?: number; pixelSize?: number; maxFps?: number;
+  /** IANA time zone for day and night; the viewer's own clock when omitted. */
+  timeZone?: string;
+  /** Pin the time of day (0-24) for demos and screenshots. */
+  hour?: number;
+}
 
 const GRID = 32;
 export function themeFromSearch(search = window.location.search): CityThemeId {
@@ -161,6 +168,8 @@ export class ChatCity {
     this.transparent = Boolean(options.transparent);
     this.zoom = options.zoom && options.zoom > 0 ? options.zoom : 1;
     this.maxFps = options.maxFps ?? 60;
+    this.timeZone = options.timeZone;
+    this.fixedHour = options.hour;
     this.randomState = [...themeId].reduce((seed, char) => Math.imul(seed ^ char.charCodeAt(0), 16777619) >>> 0, 2166136261);
     this.homes = new HomeKit(() => this.random(), this.theme, themeId);
     this.specials = new SpecialKit(() => this.random(), this.theme, themeId);
@@ -225,8 +234,10 @@ export class ChatCity {
   }
 
   private addLighting() {
-    this.scene.add(new HemisphereLight(0xc8e0e4, 0x30453a, 2.65));
+    this.hemi = new HemisphereLight(0xc8e0e4, 0x30453a, 2.65);
+    this.scene.add(this.hemi);
     const moon = new DirectionalLight(0xc4def0, 3.1);
+    this.sun = moon;
     moon.position.set(-18, 32, 13);
     moon.castShadow = true;
     moon.shadow.mapSize.set(2048, 2048);
@@ -237,6 +248,69 @@ export class ChatCity {
     const warm = new DirectionalLight(0xffba78, 0.7);
     warm.position.set(20, 13, -24);
     this.scene.add(warm);
+    this.fill = warm;
+  }
+
+  // ---------- time of day and sleep ----------
+  private hemi!: HemisphereLight;
+  private sun!: DirectionalLight;
+  private fill!: DirectionalLight;
+  private timeZone?: string;
+  private fixedHour?: number;
+  private daylightClock = 0;
+  private asleep = false;
+  private fireScale = 1;
+  private nightGlow = 1;
+
+  /** Follow a time zone ("America/New_York"), or the viewer's own clock when undefined. */
+  setTimeZone(timeZone?: string) { this.timeZone = timeZone; this.daylightClock = 0; }
+
+  private updateDaylight(delta: number) {
+    this.daylightClock -= delta;
+    if (this.daylightClock > 0) return;
+    this.daylightClock = 5;
+    const light = lightingAt(this.fixedHour ?? localHour(this.timeZone));
+    this.hemi.color.copy(light.sky);
+    this.hemi.groundColor.copy(light.ground);
+    this.hemi.intensity = light.hemi * (this.asleep ? 0.85 : 1);
+    this.sun.color.copy(light.sun);
+    this.sun.intensity = light.sunIntensity;
+    this.fill.color.copy(light.fill);
+    this.fill.intensity = light.fillIntensity;
+    const [x, y, z] = light.sunDirection;
+    if (this.sun.position.distanceTo(new Vector3(x, y, z)) > 0.4) { this.sun.position.set(x, y, z); this.shadowsDirty = true; }
+    this.renderer.toneMappingExposure = light.exposure;
+    if (!this.transparent) {
+      const sky = new Color(this.theme.sky).lerp(light.background, light.daylight);
+      (this.scene.background as Color).copy(sky);
+      this.scene.fog?.color.copy(sky);
+    }
+    // Windows, lamps and neon: bright at night, faint by day, mostly off while the city sleeps.
+    this.nightGlow = light.glow;
+    scaleSharedGlow(this.asleep ? 0.22 : 0.3 + 0.7 * light.glow);
+    this.life.setNight(light.glow > 0.8);
+  }
+
+  get isAsleep() { return this.asleep; }
+
+  /** The stream went offline (or came back): send everyone to bed, or wake the city up. */
+  setAsleep(asleep: boolean) {
+    if (asleep === this.asleep) return;
+    this.asleep = asleep;
+    this.life.setAsleep(asleep);
+    this.daylightClock = 0;
+  }
+
+  /** Screen points above a few homes, for floating "Zzz" while the city sleeps. */
+  sleepyPoints(count = 3) {
+    const homes = this.tiles.filter(tile => tile.building && tile.kind === "house");
+    const points: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < count && homes.length; i++) {
+      const home = homes[Math.floor(Math.random() * homes.length)];
+      points.push(this.screenPoint(home.group.position.clone().setY(0.6)));
+    }
+    if (this.hearthTile) points.push(this.screenPoint(this.hearthTile.group.position.clone().setY(0.1)));
+    return points;
   }
 
   private makeGround() {
@@ -667,10 +741,13 @@ export class ChatCity {
 
   private updateCampfire(delta: number) {
     this.actorClock += delta;
+    // The fire burns down to embers while the city sleeps.
+    this.fireScale += ((this.asleep ? 0.3 : 1) - this.fireScale) * Math.min(1, delta * 0.8);
     this.campfire?.children.forEach(child => {
       if (!(child instanceof Mesh) || child.userData.firePhase === undefined) return;
-      const phase = (child.userData.firePhase as number) + this.actorClock * 5;
-      child.scale.set(0.9 + Math.sin(phase) * 0.15, 0.82 + Math.sin(phase * 1.3) * 0.28, 0.9 + Math.cos(phase) * 0.15);
+      const phase = (child.userData.firePhase as number) + this.actorClock * (this.asleep ? 2 : 5);
+      const f = this.fireScale;
+      child.scale.set((0.9 + Math.sin(phase) * 0.15) * f, (0.82 + Math.sin(phase * 1.3) * 0.28) * f, (0.9 + Math.cos(phase) * 0.15) * f);
     });
   }
 
@@ -817,11 +894,7 @@ export class ChatCity {
     if (era === 2 || era === 3) {
       this.box(building, 0.2, 0.4, 0.055, 0, 0, 0.23, 0.48, mat(0x513925, 1));
     }
-    if (era === 2 || era === 3) {
-      // Fit the trim to the landmark's real height so nothing floats above short buildings.
-      const top = new Box3().setFromObject(building).max.y;
-      this.addThemeDetails(building, 0.75, Math.max(0.4, top - 0.24), 0.75, era);
-    }
+    // Town-era landmarks are already built in their civilization's style, so no extra trim.
     if (!this.connectNewBuilding(tile, building)) return false;
     tile.group.add(building);
     tile.building = building;
@@ -850,7 +923,7 @@ export class ChatCity {
       if (part.kind === "spin") part.object.rotation[part.axis] += part.speed * delta;
       else if (part.kind === "blink") part.object.visible = ((clock / part.period + part.offset) % 1) < 0.55;
       else if (part.kind === "sway") part.object.rotation.z = Math.sin(clock * part.speed + part.amount * 10) * part.amount;
-      else if (this.random() < part.rate * delta && this.particles.length < 520) {
+      else if (this.random() < part.rate * delta * (this.asleep ? 0.3 : 1) && this.particles.length < 520) {
         const at = building.localToWorld(new Vector3(part.at.x, part.at.y, part.at.z));
         this.puff(at, part.color, 0.045 + this.random() * 0.03, 1.8 + this.random(), new Vector3((this.random() - 0.5) * 0.12, 0.32 + this.random() * 0.2, (this.random() - 0.5) * 0.12), -0.12, true);
       }
@@ -1556,9 +1629,10 @@ export class ChatCity {
     if (Math.abs(oldSpan - this.viewSpan) > 0.001) this.updateCameraFrustum();
     this.updateBuildings(delta);
     this.updateAnimated(delta);
+    this.updateDaylight(delta);
     this.updateTrafficLights();
     this.birdClock -= delta;
-    if (this.birdClock <= 0) { this.birdClock = 25 + this.random() * 30; this.launchBirds(); }
+    if (this.birdClock <= 0) { this.birdClock = 25 + this.random() * 30; if (!this.asleep && this.nightGlow < 0.9) this.launchBirds(); }
     if (this.streetsDirty) this.rebuildStreets();
     this.updateCampfire(delta);
     this.life.update(delta);

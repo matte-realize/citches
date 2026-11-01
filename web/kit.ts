@@ -194,3 +194,15 @@ export function bakeStatic(root: Object3D, minMeshes = 4) {
   root.traverse(object => { if (object !== root && object.type === "Group" && object.children.length === 0 && !object.userData.keep) empty.push(object); });
   empty.forEach(object => object.removeFromParent());
 }
+
+/**
+ * Scale every glowing shared material (windows, lamps, neon, beacons) by `factor`, relative to the
+ * intensity it was created with. Used for day/night and for lights-out when the city sleeps.
+ */
+export function scaleSharedGlow(factor: number) {
+  for (const material of materialCache.values()) {
+    if (material.userData.baseEmissive === undefined) material.userData.baseEmissive = material.emissiveIntensity;
+    const base = material.userData.baseEmissive as number;
+    if (base > 0 && !material.userData.alwaysGlow) material.emissiveIntensity = base * factor;
+  }
+}

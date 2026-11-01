@@ -51,6 +51,8 @@ export class CityLife {
   private clock = 0;
   /** Crowd caps; the overlay runs inside another busy page, so it uses lighter limits. */
   limits = { people: 48, cars: 22 };
+  private asleep = false;
+  private night = false;
 
   constructor(private root: Group, private host: LifeHost, private theme: CityTheme, private themeId: CityThemeId) {}
 
@@ -63,6 +65,44 @@ export class CityLife {
     this.linked = [...cells.values()].filter(cell => cell.links.some(Boolean));
     this.doors = doors;
     this.houses = houses;
+  }
+
+  /** Late at night fewer villagers are out and about (traffic too). */
+  setNight(night: boolean) { this.night = night; }
+
+  /**
+   * Bedtime: walkers head home and go indoors, cars park and vanish, the fireside group nods off
+   * and sheep lie down. Waking up lets everyone back out.
+   */
+  setAsleep(asleep: boolean) {
+    this.asleep = asleep;
+    if (!asleep) return;
+    for (const agent of this.agents) {
+      if (agent.kind === "car" || agent.kind === "bus" || agent.kind === "wagon") agent.state = "leave";
+      else if (agent.kind === "person" && !agent.seat) this.goHome(agent);
+      else if (agent.kind === "person" && agent.seat && agent.state === "roam") agent.state = "gather";
+    }
+  }
+
+  private goHome(agent: Agent) {
+    if (agent.state === "enter" || agent.state === "toDoor" || !agent.trav) { if (agent.state !== "enter" && agent.state !== "toDoor") agent.dead = true; return; }
+    if (agent.partner) { agent.partner.partner = undefined; agent.partner = undefined; }
+    if (agent.state === "emerge") { agent.state = "enter"; agent.timer = 0.4 - agent.scale * 0.4; return; }
+    const tr = agent.trav;
+    const here = this.cells.get(tr.cur);
+    const doors = [...this.doors].sort((a, b) => a.point.distanceToSquared(agent.pos) - b.point.distanceToSquared(agent.pos));
+    for (const door of doors.slice(0, 6)) {
+      const route = this.findRoute(tr.cur, door.key);
+      if (!route) continue;
+      agent.goalDoor = door;
+      agent.route = route;
+      tr.next = agent.route.shift();
+      agent.cruise = Math.max(agent.cruise, 0.2);
+      if (!tr.next && door.key === tr.cur) { agent.target = door.point; agent.state = "toDoor"; }
+      else this.rejoinLane(agent);
+      return;
+    }
+    if (!here) agent.dead = true;
   }
 
   setEra(era: number) {
@@ -313,17 +353,18 @@ export class CityLife {
   }
 
   private managePopulation() {
+    if (this.asleep) return;
     const count = (kind: Kind) => this.agents.filter(agent => agent.kind === kind && agent.state !== "leave").length;
     const walkers = this.agents.filter(agent => agent.kind === "person" && agent.state !== "gather" && !(agent.seat && agent.state === "roam")).length;
     // More villagers gather round the fire as the first huts appear (one per home, up to five).
     const gatherers = this.agents.filter(agent => agent.kind === "person" && agent.seat).length;
     if (this.seats.length && gatherers < Math.min(5, 1 + this.houses)) this.joinGathering();
-    const wantPeople = this.doors.length && this.linked.length + this.doors.length > 1 ? Math.min(this.limits.people, 2 + Math.round(this.houses * 0.8)) : 0;
+    const wantPeople = this.doors.length && this.linked.length + this.doors.length > 1 ? Math.min(this.night ? Math.ceil(this.limits.people * 0.4) : this.limits.people, 2 + Math.round(this.houses * (this.night ? 0.3 : 0.8))) : 0;
     if (walkers < wantPeople) this.spawnPerson();
     const roads = this.linked.length;
     if (this.era >= 2 && this.era < 4 && count("wagon") < Math.min(5, Math.floor(roads / 6))) this.spawnVehicle("wagon");
     if (this.era >= 4) {
-      if (count("car") < Math.min(this.limits.cars, Math.floor(roads / 3.5))) this.spawnVehicle("car");
+      if (count("car") < Math.min(this.night ? Math.ceil(this.limits.cars * 0.4) : this.limits.cars, Math.floor(roads / 3.5))) this.spawnVehicle("car");
       if (this.era >= 5 && count("bus") < Math.min(3, Math.floor(roads / 18))) this.spawnVehicle("bus");
     }
   }
@@ -349,6 +390,7 @@ export class CityLife {
       case "gather": {
         const seat = agent.seat!;
         agent.heading = angleLerp(agent.heading, seat.face, Math.min(1, delta * 4));
+        if (this.asleep) { agent.pose = "sleep"; break; }
         agent.pose = agent.cheer > 0 ? "cheer" : seat.bench ? "sit" : Math.sin(this.clock * 0.4 + agent.phase) > 0.2 ? "talk" : "idle";
         agent.timer -= delta;
         if (agent.timer <= 0) {
@@ -407,12 +449,14 @@ export class CityLife {
       }
       case "idle": {
         agent.timer -= delta;
+        if (this.asleep) { this.goHome(agent); break; }
         agent.pose = agent.cheer > 0 ? "cheer" : Math.sin(agent.phase + this.clock) > 0.7 ? "wave" : "idle";
         if (agent.timer <= 0) { this.plan(agent); this.rejoinLane(agent); }
         break;
       }
       case "chat": {
         agent.timer -= delta;
+        if (this.asleep) agent.timer = 0;
         if (agent.partner) {
           tmp.copy(agent.partner.pos).sub(agent.pos);
           agent.heading = angleLerp(agent.heading, Math.atan2(tmp.x, tmp.z), Math.min(1, delta * 6));
@@ -528,6 +572,10 @@ export class CityLife {
     const sheep = agent.sheep!;
     agent.timer -= delta;
     agent.speed = 0;
+    // Asleep: lie down in the paddock.
+    const lying = this.asleep ? 0.6 : 1;
+    sheep.root.scale.y += (lying - sheep.root.scale.y) * Math.min(1, delta * 2);
+    if (this.asleep) { sheep.head.rotation.x = MathUtils.lerp(sheep.head.rotation.x, 0.9, delta * 2); return; }
     if (agent.state === "graze") {
       sheep.head.rotation.x = MathUtils.lerp(sheep.head.rotation.x, 0.7 + Math.sin(this.clock * 3 + agent.phase) * 0.15, delta * 4);
       if (agent.timer <= 0 || agent.panic > 0) {

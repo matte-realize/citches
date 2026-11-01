@@ -69,7 +69,24 @@ function addControls(player: HTMLElement, frame: HTMLIFrameElement, current: Cha
   player.appendChild(controls);
 }
 
+/**
+ * Is the channel live? Twitch marks offline channels on the player and shows a viewer count only
+ * when live. The overlay also falls back to chat going quiet, so this only has to be roughly right.
+ */
+function streamIsLive() {
+  if (document.querySelector(".channel-root__player--offline, [data-a-target='player-overlay-content-gate'] .offline")) return false;
+  if (document.querySelector("[data-a-target='animated-channel-viewers-count'], .live-indicator-container, [data-a-target='live-indicator']")) return true;
+  const video = document.querySelector<HTMLVideoElement>(".video-player__container video");
+  return Boolean(video && video.readyState >= 2);
+}
+
+function reportLive() {
+  const frame = document.getElementById(FRAME_ID) as HTMLIFrameElement | null;
+  frame?.contentWindow?.postMessage({ type: "chat-city:stream", live: streamIsLive() }, new URL(chromeApi().runtime.getURL("")).origin);
+}
+
 async function start() {
+  setInterval(reportLive, 5000);
   settings = await loadSettings();
   sync();
   setInterval(sync, 1000);
