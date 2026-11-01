@@ -45,6 +45,7 @@ export class CityHud {
   private dangerMeter = el("div", "meter danger-meter");
   private recovery = el("div", "recovery-row");
   private leaders = el("div", "leaders-row");
+  private upkeepLine = el("div", "upkeep-line");
   private lastBubbleAt = 0;
   private sleepSign = el("div", "sleep-sign");
   private zTimer?: ReturnType<typeof setInterval>;
@@ -70,7 +71,8 @@ export class CityHud {
     dangerRow.append(el("div", "danger-label", "DANGER"), this.dangerMeter);
     this.recovery.hidden = true;
     this.leaders.hidden = true;
-    board.append(scoreRow, eraRow, dangerRow, this.leaders, this.recovery);
+    this.upkeepLine.hidden = true;
+    board.append(scoreRow, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery);
     this.sleepSign.hidden = true;
     this.sleepSign.append(el("span", "sleep-moon", "☾"), el("span", "sleep-text", "STREAM OFFLINE · THE CITY IS SLEEPING"));
     board.prepend(this.sleepSign);
@@ -122,6 +124,10 @@ export class CityHud {
       }));
     }
     if (!replay && score.highlight) this.say(score.highlight.user, score.highlight.text);
+    const upkeep = score.upkeep ?? "steady";
+    this.upkeepLine.hidden = upkeep === "steady" || document.body.classList.contains("city-asleep");
+    this.upkeepLine.className = `upkeep-line ${upkeep}`;
+    this.upkeepLine.textContent = upkeep === "decaying" ? "QUIET CHAT · THE CITY IS WEARING DOWN" : "CHAT IS REPAIRING THE CITY";
   }
 
   setProgress(progress: CommunityProgress) {
@@ -154,6 +160,17 @@ export class CityHud {
         }
       }, 1400);
     } else this.banner("GOOD MORNING!", "era");
+  }
+
+  /** A building fixed up by chat, or one that crumbled after being neglected. */
+  upkeepPop(kind: "collapse" | "repair", at: { x: number; y: number }) {
+    const node = el("div", `pop ${kind === "repair" ? "pop-plus pop-repair" : "pop-minus pop-ruin"}`);
+    node.append(el("span", "pop-points", kind === "repair" ? "FIXED!" : "-1 HOME"), el("span", "pop-label", kind === "repair" ? "repaired" : "fell into ruin"));
+    node.style.left = `${Math.max(90, Math.min(innerWidth - 90, at.x))}px`;
+    node.style.top = `${Math.max(60, Math.min(innerHeight - 160, at.y))}px`;
+    node.style.setProperty("--tilt", `${(Math.random() - 0.5) * 10}deg`);
+    this.popLayer.appendChild(node);
+    setTimeout(() => node.remove(), 2400);
   }
 
   /** A villager repeats a wholesome chat message in a pixel speech bubble. */

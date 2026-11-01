@@ -20,6 +20,9 @@ export type SimEvent =
   | { type: "build"; kind: "house" | "landmark"; count: number; builders?: string[] }
   | { type: "effect"; kind: "fireworks"; intensity: number }
   | { type: "boom"; viewers: number }
+  /** Quiet chat wears one building down a step; positive chat repairs the most worn one. */
+  | { type: "decay"; count: number }
+  | { type: "repair"; count: number }
   | { type: "disaster"; kind: AttackKind; intensity: number; damageCount?: number; durationMs?: number; reason?: string };
 
 export type AttackKind = "fire" | "meteor" | "storm" | "swarm";
@@ -32,6 +35,8 @@ export interface ScoreSnapshot {
   topBuilders?: Array<{ name: string; points: number }>;
   /** The most wholesome message of this tick, for villagers to say out loud. */
   highlight?: ChatHighlight;
+  /** Whether the city is currently wearing down from quiet chat, being repaired, or steady. */
+  upkeep?: "decaying" | "repairing" | "steady";
 }
 
 export interface MessageSource {

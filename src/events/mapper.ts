@@ -19,6 +19,7 @@ export interface MapperState {
   recoveryActive: boolean; recoveryEra: number; recoveryProgress: number; recoveryGoal: number;
   scoreTotal: number; threat: number; snapshot: ScoreSnapshot;
   leaderboard?: Array<[string, number]>;
+  outstandingWear?: number;
 }
 
 export class EventMapper {
@@ -40,6 +41,14 @@ export class EventMapper {
   private recentMinusMessages = 0;
   private peakThreatRatio = 0;
   private plusRate = 0; // exponentially weighted plus points per minute
+  private typicalRate = 0; // the channel's normal pace, over a much longer window
+  private decayProgress = 0;
+  private repairProgress = 0;
+  private outstandingWear = 0;
+  private lastMessageAt?: number;
+  private lastDecayAt = 0;
+  private lastRepairAt = 0;
+  private upkeep: "decaying" | "repairing" | "steady" = "steady";
   private threshold = config.threat.destroyThreshold;
 
   /** Current minus points needed to knock one building down. */
@@ -61,12 +70,13 @@ export class EventMapper {
       recoveryActive: this.recoveryActive, recoveryEra: this.recoveryEra,
       recoveryProgress: this.recoveryProgress, recoveryGoal: this.recoveryGoal,
       scoreTotal: this.scoreTotal, threat: this.threat, snapshot: { ...this.snapshot, highlight: undefined },
+      outstandingWear: this.outstandingWear,
       leaderboard: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 50)
     };
   }
 
   importState(state: Partial<MapperState>) {
-    const numbers = ["houseProgress", "landmarkProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat"] as const;
+    const numbers = ["houseProgress", "landmarkProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat", "outstandingWear"] as const;
     for (const key of numbers) if (typeof state[key] === "number" && Number.isFinite(state[key])) this[key] = state[key] as number;
     if (typeof state.recoveryActive === "boolean") this.recoveryActive = state.recoveryActive;
     if (state.snapshot) this.snapshot = { ...state.snapshot, pops: [] };
@@ -193,7 +203,44 @@ export class EventMapper {
     }
     const attack = this.maybeAttack(now);
     if (attack) events.push(attack);
+    const upkeep = this.updateUpkeep(signals, now, seconds);
+    if (upkeep) events.push(upkeep);
+    this.snapshot.upkeep = this.upkeep;
     return events;
+  }
+
+  /** Quiet chat wears the city down; positive chat repairs it. Paused while the city sleeps. */
+  private updateUpkeep(signals: GrowthSignals, now: number, seconds: number): SimEvent | undefined {
+    const upkeep = config.upkeep;
+    if (signals.scoredMessages) this.lastMessageAt = now;
+    const keepTypical = Math.exp(-seconds / (upkeep.typicalWindowMinutes * 60));
+    this.typicalRate = this.typicalRate * keepTypical + this.plusRate * (1 - keepTypical);
+    const quietLevel = Math.max(upkeep.quietFloorPerMinute, this.typicalRate * upkeep.quietShare);
+    const awake = this.lastMessageAt !== undefined && now - this.lastMessageAt < upkeep.pauseAfterSilenceMs;
+    const warmedUp = this.sessionStartedAt !== undefined && now - this.sessionStartedAt > upkeep.warmupMinutes * 60_000;
+    const quiet = awake && warmedUp && this.plusRate < quietLevel;
+    this.upkeep = "steady";
+    if (quiet) {
+      this.decayProgress += (seconds / upkeep.decayStepSeconds) * (1 - this.plusRate / quietLevel);
+      this.upkeep = "decaying";
+      if (this.decayProgress >= 1 && now - this.lastDecayAt >= upkeep.minDecayGapMs) {
+        this.decayProgress -= 1;
+        this.lastDecayAt = now;
+        this.outstandingWear++;
+        return { type: "decay", count: 1 };
+      }
+    } else this.decayProgress = Math.max(0, this.decayProgress - seconds / upkeep.decayStepSeconds);
+    if (this.outstandingWear > 0 && signals.plusPoints > 0) {
+      this.repairProgress = Math.min(upkeep.repairPoints * 2, this.repairProgress + signals.plusPoints);
+      if (!quiet) this.upkeep = "repairing";
+      if (this.repairProgress >= upkeep.repairPoints && now - this.lastRepairAt >= upkeep.repairCooldownMs) {
+        this.repairProgress -= upkeep.repairPoints;
+        this.lastRepairAt = now;
+        this.outstandingWear--;
+        return { type: "repair", count: 1 };
+      }
+    }
+    return undefined;
   }
 
   /** The top contributors since the last build get the credit for it. */

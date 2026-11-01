@@ -117,6 +117,16 @@ html.overlay .score-total { font-size: 18px; }
 .pop-credit { color: var(--gold); text-shadow: 2px 2px 0 var(--gold-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); }
 .pop-credit .pop-label { font-size: 16px; color: var(--text); }
 
+/* Upkeep. */
+.upkeep-line { margin-top: 8px; font-family: var(--chunky); font-size: 8px; letter-spacing: .04em; }
+.upkeep-line.decaying { color: #d8b48a; animation: blink 1.6s steps(2) infinite; }
+.upkeep-line.decaying::before { content: "▼ "; }
+.upkeep-line.repairing { color: var(--plus); }
+.upkeep-line.repairing::before { content: "▲ "; }
+.pop-repair .pop-points { color: #9ff0b8; }
+.pop-ruin { color: #c9b8a0; }
+.pop-ruin .pop-points { color: #d8b48a; }
+
 /* Bedtime. */
 .sleep-sign { display: flex; align-items: center; gap: 8px; margin: -2px 0 9px; padding: 5px 8px; background: #121a28; box-shadow: 0 0 0 2px var(--ink); font-family: var(--chunky); font-size: 8px; color: #b8c8ff; letter-spacing: .04em; }
 .sleep-moon { font-family: var(--pixel); font-size: 14px; color: #ffe9a8; animation: bob 2.4s ease-in-out infinite; }

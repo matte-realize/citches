@@ -130,6 +130,24 @@ function vertexColorMaterial(roughness: number) {
   return material;
 }
 
+const grimeMaterials = new Map<string, MeshStandardMaterial>();
+/**
+ * A grimier copy of a baked vertex-colour material: the material colour multiplies the vertex
+ * colours, so one shared material per wear level dirties a whole building at no extra cost.
+ */
+export function grimeMaterial(source: MeshStandardMaterial, level: number) {
+  const key = `${source.roughness}|${level}`;
+  let material = grimeMaterials.get(key);
+  if (!material) {
+    const tint = [0xffffff, 0xc4baa6, 0x968a74, 0x6e6454][Math.min(3, level)];
+    material = new MeshStandardMaterial({ vertexColors: true, roughness: Math.min(1, source.roughness + level * 0.05), color: tint });
+    material.userData.shared = true;
+    material.userData.vertexColorBase = source;
+    grimeMaterials.set(key, material);
+  }
+  return material;
+}
+
 /** Plain opaque colours can be baked into vertex colours; glowing, metallic or see-through ones keep their material. */
 function bakeKey(material: Material) {
   if (!(material instanceof MeshStandardMaterial) || material.transparent || material.vertexColors || material.map) return material.uuid;

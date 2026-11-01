@@ -43,6 +43,7 @@ const city = new ChatCity(host, themeFromSearch(`?${params}`), {
   timeZone: params.get("tz") ?? broadcaster.timeZone ?? undefined,
   hour: params.has("hour") ? Number(params.get("hour")) : undefined
 });
+city.onUpkeep = (kind, at) => hud.upkeepPop(kind, city.screenPoint(at));
 if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) (window as unknown as { chatCity: ChatCity }).chatCity = city;
 const hud = new CityHud({
   overlay,

@@ -57,6 +57,23 @@ export const config = {
     technologyPenalty: 0.35
   },
   /** What counts as spam. Short emote reactions and stretched words ("noooo") are normal chat. */
+  /**
+   * Upkeep: no activity, no progress. When chat is quiet compared with the channel's own normal
+   * pace, buildings slowly wear down (weathered, shabby, ruined, then collapse). Positive chat
+   * repairs the most worn ones. Wear pauses once chat has been silent long enough for the city to
+   * fall asleep, so a stream ending never turns the city to ruins.
+   */
+  upkeep: {
+    quietShare: 0.35,          // quiet = plus points below this share of the channel's typical rate...
+    quietFloorPerMinute: 1.5,  // ...or below ~one positive message a minute, whichever is higher
+    decayStepSeconds: 60,      // at most one wear step a minute, in fully quiet chat
+    minDecayGapMs: 12_000,
+    pauseAfterSilenceMs: 240_000,
+    warmupMinutes: 2,          // no wear during the first minutes of a session
+    repairPoints: 9,           // plus points that repair one wear step
+    repairCooldownMs: 3000,
+    typicalWindowMinutes: 20
+  },
   /** What `npm run calibrate` checks the danger system against, using real chat logs. */
   calibration: {
     lostPerBuilt: [0.03, 0.3] as [number, number],     // losses are noticeable but never outpace growth

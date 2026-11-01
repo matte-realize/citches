@@ -1,7 +1,7 @@
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPixelatedPass } from "three/examples/jsm/postprocessing/RenderPixelatedPass.js";
-import { ACESFilmicToneMapping, BasicShadowMap, ShaderMaterial, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
+import { ACESFilmicToneMapping, BasicShadowMap, Box3, ShaderMaterial, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
@@ -9,7 +9,7 @@ import { HomeKit } from "./homes.js";
 import { buildModernLandmark } from "./landmarks.js";
 import { SpecialKit } from "./specials.js";
 import type { Animated } from "./specials.js";
-import { bakeStatic, disposeObject, scaleSharedGlow } from "./kit.js";
+import { bakeStatic, disposeObject, grimeMaterial, scaleSharedGlow } from "./kit.js";
 import { lightingAt, localHour } from "./daycycle.js";
 import { CityLife } from "./life.js";
 import type { Door, NetCell } from "./life.js";
@@ -903,6 +903,133 @@ export class ChatCity {
     return true;
   }
 
+  // ---------- upkeep: wear and repair ----------
+  private buildCounter = 0;
+  /** Lets the HUD announce collapses and repairs. */
+  onUpkeep?: (kind: "collapse" | "repair", at: Vector3) => void;
+
+  private wearable() {
+    return this.tiles.filter(tile => tile.building && (tile.kind === "house" || tile.kind === "landmark") && tile.building.userData.collapse === undefined && (tile.building.userData.buildElapsed ?? 1) >= 0.82);
+  }
+
+  /** Quiet chat: an old building (chosen with a bias toward the oldest) gets more run down. */
+  private wearDown(historical: boolean) {
+    const candidates = this.wearable().sort((a, b) => (a.building!.userData.builtAt ?? 0) - (b.building!.userData.builtAt ?? 0));
+    if (!candidates.length) return;
+    // Mostly the oldest third of the city, sometimes anywhere.
+    const pool = this.random() < 0.75 ? candidates.slice(0, Math.max(1, Math.ceil(candidates.length / 3))) : candidates;
+    const tile = pool[Math.floor(this.random() * pool.length)];
+    const level = (tile.building!.userData.wear ?? 0) + 1;
+    if (level > 3) {
+      // A ruin left alone finally gives way and leaves a rubble lot behind.
+      if (historical) { this.destroyBuilding(tile); this.addRubble(tile); }
+      else { tile.building!.userData.collapse = 0; tile.building!.userData.leavesRubble = true; this.onUpkeep?.("collapse", tile.group.position.clone()); }
+      return;
+    }
+    this.setWear(tile, level);
+    if (!historical) for (let i = 0; i < 6; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.7, 0.3 + this.random() * 0.5, (this.random() - 0.5) * 0.7)), 0x8a8070, 0.04, 1.1, new Vector3(0, -0.2, 0), 0.6, true);
+  }
+
+  /** Positive chat: the most run-down building gets fixed up a step. */
+  private repairOne(historical: boolean) {
+    const worn = this.wearable().filter(tile => (tile.building!.userData.wear ?? 0) > 0).sort((a, b) => (b.building!.userData.wear ?? 0) - (a.building!.userData.wear ?? 0));
+    const tile = worn[0];
+    if (!tile) return;
+    this.setWear(tile, (tile.building!.userData.wear ?? 0) - 1);
+    if (historical) return;
+    for (let i = 0; i < 10; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.6, 0.4 + this.random() * 0.6, (this.random() - 0.5) * 0.6)), i % 2 ? 0xffe08a : 0x9ff0b8, 0.035, 0.9, new Vector3(0, 0.8, 0), 0.4);
+    this.onUpkeep?.("repair", tile.group.position.clone());
+  }
+
+  private setWear(tile: Tile, level: number) {
+    const building = tile.building!;
+    level = Math.max(0, Math.min(3, level));
+    building.userData.wear = level;
+    // Grime: swap baked vertex-colour materials for darker shared copies.
+    building.traverse(object => {
+      if (!(object instanceof Mesh) || object instanceof InstancedMesh) {
+        if (object instanceof InstancedMesh && object.parent === building) object.visible = level < 2; // windows go dark when abandoned
+        return;
+      }
+      const material = object.material as MeshStandardMaterial;
+      if (!material.vertexColors) return;
+      const base = (material.userData.vertexColorBase as MeshStandardMaterial | undefined) ?? material;
+      object.material = level === 0 ? base : grimeMaterial(base, level);
+    });
+    // Lean a little more with each step.
+    const lean = [0, 0, 0.025, 0.055][level];
+    building.rotation.z = lean * (tile.x % 2 ? 1 : -1);
+    building.rotation.x = lean * 0.5 * (tile.z % 2 ? 1 : -1);
+    // Rebuild the clutter of neglect.
+    const old = building.userData.wearProps as Group | undefined;
+    if (old) { building.remove(old); disposeObject(old); }
+    building.userData.wearProps = undefined;
+    if (level === 0) { this.shadowsDirty = true; return; }
+    const props = new Group();
+    props.userData.keep = true;
+    // Cracks running down the front and side walls, more of them as it gets worse.
+    const top = new Box3().setFromObject(building).max.y;
+    const crack = mat(0x2a2420, 1);
+    for (let i = 0; i < level * 2; i++) {
+      const height = Math.min(0.5, top * 0.4) * (0.5 + this.random() * 0.5);
+      const piece = new Mesh(new BoxGeometry(0.018, height, 0.01), crack);
+      const front = i % 2 === 0;
+      piece.position.set(front ? (this.random() - 0.5) * 0.6 : 0.42, Math.max(0.2, top * (0.3 + this.random() * 0.5)), front ? 0.43 : (this.random() - 0.5) * 0.6);
+      if (!front) piece.rotation.y = Math.PI / 2;
+      piece.rotation.z = (this.random() - 0.5) * 0.7;
+      props.add(piece);
+    }
+    const weeds = mat(0x4e6e3a, 1);
+    for (let i = 0; i < 3 + level * 3; i++) {
+      const tuft = new Mesh(new ConeGeometry(0.03, 0.08 + level * 0.03, 4), weeds);
+      tuft.position.set((this.random() - 0.5) * 0.85, 0.04, (this.random() - 0.5) * 0.85);
+      props.add(tuft);
+    }
+    if (level >= 2) {
+      const plank = mat(0x6b4f36, 1);
+      for (let i = 0; i < 3; i++) {
+        const board = new Mesh(new BoxGeometry(0.14, 0.03, 0.012), plank);
+        board.position.set((i - 1) * 0.2, 0.2 + this.random() * 0.25, 0.4);
+        board.rotation.z = (this.random() - 0.5) * 0.8;
+        props.add(board);
+      }
+      const vine = mat(0x3f6a34, 1);
+      for (let i = 0; i < 4; i++) {
+        const strand = new Mesh(new BoxGeometry(0.03, 0.2 + this.random() * 0.3, 0.02), vine);
+        strand.position.set(-0.38 + this.random() * 0.15, 0.15 + i * 0.12, 0.38);
+        props.add(strand);
+      }
+    }
+    if (level >= 3) {
+      const stone = mat(0x7a7262, 1);
+      for (let i = 0; i < 7; i++) {
+        const chunk = new Mesh(new BoxGeometry(0.06 + this.random() * 0.06, 0.04 + this.random() * 0.05, 0.06 + this.random() * 0.06), stone);
+        chunk.position.set((this.random() - 0.5) * 0.9, 0.03, 0.3 + this.random() * 0.15);
+        chunk.rotation.y = this.random() * 3;
+        props.add(chunk);
+      }
+    }
+    bakeStatic(props, 2);
+    building.add(props);
+    building.userData.wearProps = props;
+    this.shadowsDirty = true;
+  }
+
+  private addRubble(tile: Tile) {
+    const pile = new Group();
+    const stone = mat(0x7a7262, 1), wood = mat(0x5a4632, 1);
+    for (let i = 0; i < 9; i++) {
+      const chunk = new Mesh(new BoxGeometry(0.07 + this.random() * 0.1, 0.04 + this.random() * 0.07, 0.07 + this.random() * 0.1), i % 3 ? stone : wood);
+      chunk.position.set((this.random() - 0.5) * 0.7, 0.04, (this.random() - 0.5) * 0.7);
+      chunk.rotation.set(this.random() * 0.4, this.random() * 3, this.random() * 0.4);
+      pile.add(chunk);
+    }
+    bakeStatic(pile, 2);
+    tile.group.add(pile);
+    tile.trees.push(pile); // cleared like trees when the lot is rebuilt
+    this.shadowsDirty = true;
+  }
+
   private makeSpecial(tile: Tile, immediate = false): boolean {
     const building = new Group();
     const parts = this.specials.build(building, this.eraIndex);
@@ -1132,6 +1259,7 @@ export class ChatCity {
     building.userData.buildElapsed = immediate ? 1 : 0;
     building.userData.tile = tile;
     building.userData.era = this.eraIndex;
+    building.userData.builtAt = this.buildCounter++;
     building.scale.set(1, immediate ? 1 : 0.02, 1);
     building.position.y = immediate ? 0 : 0.49;
   }
@@ -1507,6 +1635,8 @@ export class ChatCity {
     else if (event.type === "boom") this.boom(event.viewers, historical);
     else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs, event.kind);
     else if (event.type === "effect" && !historical) { this.fireworks(this.focus.x, this.focus.z, event.intensity); this.life.cheer(3); }
+    else if (event.type === "decay") for (let i = 0; i < event.count; i++) this.wearDown(historical);
+    else if (event.type === "repair") for (let i = 0; i < event.count; i++) this.repairOne(historical);
   }
 
   private updateBuildings(delta: number) {
@@ -1536,7 +1666,11 @@ export class ChatCity {
         }
         building.scale.y = Math.max(0.04, 1 - step / steps);
         this.shadowsDirty = true;
-        if (step >= steps) this.destroyBuilding(tile);
+        if (step >= steps) {
+          const rubble = building.userData.leavesRubble;
+          this.destroyBuilding(tile);
+          if (rubble) { for (const tree of tile.trees) tile.group.remove(tree); tile.trees = []; this.addRubble(tile); }
+        }
         continue;
       }
       const elapsed = (building.userData.buildElapsed ?? 0) + delta;

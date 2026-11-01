@@ -46,6 +46,10 @@ npm run calibrate -- logs/xqc-*.jsonl
 
 `calibrate` replays real chat logs through the same pipeline on message time (hours in seconds) and checks attack spacing, attack size, the worst minute, whether the city keeps growing, and losses per build against `config.calibration`. Live mode records every chat it reads into `logs/`, so the check gets better the more streams it has seen. Retune `config.threat` and rerun until all targets are met.
 
+## Upkeep: no activity, no progress
+
+A city needs its community. When chat goes quiet compared with the channel's own normal pace (or drops below roughly one positive message a minute), buildings slowly wear down, oldest first: **weathered** (grime, weeds, cracks), **shabby** (darker, boarded windows, vines, lights out, a slight lean), **ruined** (rubble, a heavier lean), and finally they **collapse** into a rubble lot that can be rebuilt. At most one wear step happens a minute. Positive chat repairs the most worn buildings first, with sparkles and a `FIXED!` pop, and the scoreboard says whether quiet chat is wearing the city down or chat is repairing it. A small but kind chat never decays; a slow, neutral one stalls and looks run down until a burst of hype brings it back. Wear pauses once the city falls asleep, so ending a stream never turns the city to ruins. Tuning lives in `config.upkeep`, and `npm run calibrate` reports wear and repairs per hour.
+
 ## Day, night and bedtime
 
 The sun follows the local time: it rises in the east, arcs over the city (shadows move with it) and sets in the west, through pink dawns and orange dusks, with a moonlit night in between. Windows, street lamps and neon glow at night and fade by day, and fewer villagers and cars are out late. By default every viewer sees their own time of day; on Twitch the streamer can instead pin their own time zone on the configuration page. `?tz=Europe/Paris` follows a zone and `?hour=19` pins the time for demos.
