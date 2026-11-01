@@ -20,6 +20,10 @@ const BRICK = [0x9c4f3a, 0x8a4434, 0xa8644a, 0x7d5041, 0xb07a5a];
 export class HomeKit {
   private recent: HomeStyle[] = [];
   constructor(private random: Random, private theme: CityTheme, private themeId: CityThemeId) {}
+  /** Architecture family: new themes reuse one of the four and bring their own palette. */
+  private get style() { return this.theme.style; }
+  /** Norse homes wear turf; the Medieval Kingdom uses slate from its own palette. */
+  private turf(fallback = 0x5f7a45) { return this.themeId === "medieval" ? this.roofMat() : sharedMat(fallback, 1); }
 
   private pick<T>(list: readonly T[]): T { return list[Math.floor(this.random() * list.length)]; }
   private wall() { return sharedMat(tint(this.pick(this.theme.house), this.random, 0.03, 0.12), 0.86); }
@@ -64,7 +68,7 @@ export class HomeKit {
 
   /** Early alternative dwellings mixed in with the theme huts, plus yard clutter for every hut. */
   primitive(building: Group, kind = this.pick(["tent", "pit", "stilt"] as const)) {
-    const hide = sharedMat(tint(this.themeId === "egypt" ? 0xd8c69c : 0xb89b74, this.random, 0.03, 0.12), 1);
+    const hide = sharedMat(tint(this.style === "egypt" ? 0xd8c69c : 0xb89b74, this.random, 0.03, 0.12), 1);
     const wood = sharedMat(0x6b4a2e, 1);
     if (kind === "tent") {
       const tent = place(building, coneGeo(0.36, 0.72, 7), hide, 0, 0.36, -0.05);
@@ -162,17 +166,17 @@ export class HomeKit {
 
   /** Each civilization keeps its character after industrialisation. */
   private themeTouch(parent: Group, w: number, d: number, h: number, x: number, z: number, floors: number, fh: number) {
-    if (this.themeId === "egypt") {
+    if (this.style === "egypt") {
       this.palm(parent, x + w * 0.3, z - d * 0.25);
       for (const child of parent.children.slice(-10)) child.position.y += h; // lift the palm onto the roof
       this.awning(parent, w * 0.4, d * 0.35, h, x - w * 0.15, z + d * 0.1);
-    } else if (this.themeId === "rome") {
+    } else if (this.style === "rome") {
       this.hip(parent, w + 0.06, d + 0.06, h, 0.18, sharedMat(tint(0xb05b42, this.random), 0.85), x, z);
       for (const sx of [-1, 1]) place(parent, cylinderGeo(0.025, 0.03, 0.34, 8), sharedMat(0xe0d3b5, 0.7), x + sx * 0.12, 0.17, z + d / 2 + 0.05);
       block(parent, 0.32, 0.04, 0.08, x, 0.36, z + d / 2 + 0.05, sharedMat(0xe0d3b5, 0.7));
-    } else if (this.themeId === "norse") {
+    } else if (this.style === "norse") {
       for (let i = 0; i < 5; i++) block(parent, 0.02, h * 0.98, 0.012, x - w / 2 + 0.08 + (i * (w - 0.16)) / 4, h / 2, z + d / 2 + 0.008, sharedMat(0x4f3a28, 1), 0, false);
-      this.gable(parent, w, d, h, 0.3, sharedMat(this.random() < 0.5 ? 0x3a4440 : 0x5f7a45, 0.9), this.random() < 0.5, x, z, 0.04);
+      this.gable(parent, w, d, h, 0.3, (this.random() < 0.5 ? sharedMat(0x3a4440, 0.9) : this.turf()), this.random() < 0.5, x, z, 0.04);
     } else {
       const tile = sharedMat(tint(this.pick(this.theme.roof), this.random), 0.85);
       for (let floor = 2; floor < floors; floor += 2) block(parent, w + 0.16, 0.03, d + 0.16, x, floor * fh + 0.02, z, tile);
@@ -197,14 +201,14 @@ export class HomeKit {
 
   /** Theme-appropriate roof over a box. */
   private themedRoof(parent: Group, w: number, d: number, y: number, x = 0, z = 0, material = this.roofMat()) {
-    if (this.themeId === "egypt") {
+    if (this.style === "egypt") {
       this.parapet(parent, w, d, y, x, z);
       if (this.random() < 0.5) this.awning(parent, w * 0.5, d * 0.45, y, x + w * 0.18, z - d * 0.15);
-    } else if (this.themeId === "rome") {
+    } else if (this.style === "rome") {
       this.hip(parent, w + 0.08, d + 0.08, y, 0.2 + this.random() * 0.08, material, x, z);
-    } else if (this.themeId === "norse") {
+    } else if (this.style === "norse") {
       const turf = this.random() < 0.5;
-      this.gable(parent, w, d, y, 0.32, turf ? sharedMat(0x5f7a45, 1) : material, this.random() < 0.5, x, z, 0.06);
+      this.gable(parent, w, d, y, 0.32, turf ? this.turf() : material, this.random() < 0.5, x, z, 0.06);
     } else {
       block(parent, w + 0.2, 0.035, d + 0.2, x, y + 0.015, z, material);
       this.hip(parent, w + 0.06, d + 0.06, y + 0.03, 0.24, material, x, z);
@@ -227,7 +231,7 @@ export class HomeKit {
   }
 
   private chimney(parent: Group, x: number, y: number, z: number) {
-    block(parent, 0.07, 0.24, 0.07, x, y + 0.12, z, sharedMat(this.themeId === "norse" ? 0x6b665a : 0x8a5a44, 0.9));
+    block(parent, 0.07, 0.24, 0.07, x, y + 0.12, z, sharedMat(this.style === "norse" ? 0x6b665a : 0x8a5a44, 0.9));
     block(parent, 0.09, 0.025, 0.09, x, y + 0.25, z, sharedMat(0x4a4038, 0.9));
     // The city puffs smoke from some chimneys (local position, read after the home is built).
     (parent.userData.smoke ??= []).push({ x, y: y + 0.28, z });
@@ -269,7 +273,7 @@ export class HomeKit {
     }
   }
 
-  private fence(parent: Group, x0: number, x1: number, z: number, material = sharedMat(this.themeId === "japan" ? 0x5b4b3a : 0x8a6d4e, 1), gapCenter?: number) {
+  private fence(parent: Group, x0: number, x1: number, z: number, material = sharedMat(this.style === "japan" ? 0x5b4b3a : 0x8a6d4e, 1), gapCenter?: number) {
     const count = Math.round((x1 - x0) / 0.08);
     for (let i = 0; i <= count; i++) {
       const x = x0 + (i / count) * (x1 - x0);
@@ -297,9 +301,9 @@ export class HomeKit {
     this.windowsOn(windows, 0, z, w, d, 0, floors, fh, { skipFrontGround: true, shutters: this.random() < 0.6 ? sharedMat(this.theme.accent, 0.9) : undefined });
     this.entrance(building, 0, z + d / 2);
     const ridgeAlongX = this.random() < 0.5;
-    if (this.themeId === "egypt") this.themedRoof(building, w, d, h, 0, z);
+    if (this.style === "egypt") this.themedRoof(building, w, d, h, 0, z);
     else this.gable(building, w, d, h, 0.22 + this.random() * 0.1, this.roofMat(), ridgeAlongX, 0, z);
-    if (this.themeId !== "egypt") this.chimney(building, w * 0.3, h + 0.05, z - d * 0.2);
+    if (this.style !== "egypt") this.chimney(building, w * 0.3, h + 0.05, z - d * 0.2);
     if (this.random() < 0.5) this.flowers(building, -0.25, 0.32, 0.3, 0.14);
     else this.tree(building, -0.3, 0.3, 0.9);
     if (this.random() < 0.7) this.fence(building, -0.46, 0.46, 0.45, undefined, 0);
@@ -321,8 +325,8 @@ export class HomeKit {
     // Low garden wall closing the courtyard.
     block(building, 0.04, 0.12, 0.5, 0.44, 0.06, 0.15, this.stone());
     block(building, 0.5, 0.12, 0.04, 0.2, 0.06, 0.42, this.stone());
-    if (this.themeId === "egypt") this.palm(building, 0.18, 0.12);
-    else if (this.themeId === "japan") this.tree(building, 0.18, 0.12, 0.9, 0xc0503e);
+    if (this.style === "egypt") this.palm(building, 0.18, 0.12);
+    else if (this.style === "japan") this.tree(building, 0.18, 0.12, 0.9, 0xc0503e);
     else this.tree(building, 0.18, 0.12, 0.9);
     if (this.random() < 0.5) place(building, cylinderGeo(0.06, 0.07, 0.05, 10), sharedMat(0x5f8fa0, 0.3, { metalness: 0.2 }), 0.05, 0.03, 0.22); // fountain / well
   }
@@ -341,7 +345,7 @@ export class HomeKit {
       this.entrance(building, x, z + d / 2, 0.22, 0.09);
       // Front stoop + optional bay window.
       if (this.random() < 0.5) block(building, unitW * 0.55, fh * 0.7, 0.08, x, fh * 1.45, z + d / 2 + 0.04, material);
-      if (modern || this.themeId === "egypt" || this.random() < 0.4) {
+      if (modern || this.style === "egypt" || this.random() < 0.4) {
         block(building, unitW, 0.05, d + 0.03, x, h + 0.025, z, this.stone());
         if (this.random() < 0.4) this.chimney(building, x + unitW * 0.2, h, z - d * 0.25);
       } else this.gable(building, unitW - 0.01, d, h, 0.2 + this.random() * 0.1, this.roofMat(), false, x, z, 0.02);
@@ -367,7 +371,7 @@ export class HomeKit {
     // External stair climbing the side.
     const stair = this.stone();
     for (let i = 0; i < floors * 2; i++) block(building, 0.1, 0.04, 0.08, 0.2, 0.05 + i * (h / (floors * 2)), -0.32 + i * (0.5 / (floors * 2)), stair, 0, false);
-    if (this.themeId === "egypt") this.palm(building, 0.32, 0.3);
+    if (this.style === "egypt") this.palm(building, 0.32, 0.3);
     else this.tree(building, 0.32, 0.3, 0.8);
   }
 
@@ -379,7 +383,7 @@ export class HomeKit {
     this.entrance(building, -0.2, 0.02);
     this.gable(building, w, d, h, 0.22, this.roofMat(), true, -0.2, -0.18);
     // Barn
-    const barnColor = this.themeId === "norse" ? 0x7a3b2c : this.themeId === "japan" ? 0x5b4b3a : 0x9a7a52;
+    const barnColor = this.style === "norse" ? 0x7a3b2c : this.style === "japan" ? 0x5b4b3a : 0x9a7a52;
     block(building, 0.3, 0.32, 0.4, 0.28, 0.16, -0.2, sharedMat(barnColor, 0.95));
     this.gable(building, 0.3, 0.4, 0.32, 0.18, this.roofMat(), false, 0.28, -0.2, 0.03);
     block(building, 0.14, 0.2, 0.02, 0.28, 0.1, 0.005, sharedMat(0x4a3628, 1));
@@ -390,7 +394,7 @@ export class HomeKit {
   }
 
   private signature({ building, era, windows }: Ctx) {
-    if (this.themeId === "egypt") {
+    if (this.style === "egypt") {
       // Mudbrick house with rooftop terrace, stair and shade awning.
       this.lawn(building, 0xb59a6a);
       const h = era >= 3 ? 0.62 : 0.4;
@@ -403,7 +407,7 @@ export class HomeKit {
       for (let i = 0; i < 5; i++) block(building, 0.12, 0.04, 0.07, 0.35, 0.04 + i * h / 5, 0.15 - i * 0.07, this.stone(), 0, false);
       this.palm(building, -0.38, 0.32);
       place(building, sphereGeo(0.04, 6, 5), sharedMat(0x9a5a3a, 1), 0.2, 0.04, 0.33); // pot
-    } else if (this.themeId === "rome") {
+    } else if (this.style === "rome") {
       // Domus: tiled roof around an open atrium, a small portico in front.
       this.lawn(building, 0x8b8a62);
       const h = era >= 3 ? 0.48 : 0.38;
@@ -420,14 +424,14 @@ export class HomeKit {
       pediment.scale.set(0.42, 0.12, 0.1);
       this.entrance(building, 0, 0.25);
       this.tree(building, 0.36, 0.36, 0.7, 0x3f5a35);
-    } else if (this.themeId === "norse") {
+    } else if (this.style === "norse") {
       // Longhouse with turf roof and carved crossed gables.
       this.lawn(building, 0x5c7348);
       const h = 0.3;
       block(building, 0.92, h, 0.5, 0, h / 2, -0.12, sharedMat(0x6b4f35, 1));
       for (let i = 0; i < 7; i++) block(building, 0.025, h, 0.52, -0.42 + i * 0.14, h / 2, -0.12, sharedMat(0x4f3a28, 1), 0, false);
       this.windowsOn(windows, 0, -0.12, 0.92, 0.5, 0, 1, h, { skipFrontGround: true });
-      this.gable(building, 0.92, 0.5, h, 0.34, sharedMat(this.random() < 0.6 ? 0x5f7a45 : 0x8a7a4a, 1), true, 0, -0.12, 0.06);
+      this.gable(building, 0.92, 0.5, h, 0.34, (this.random() < 0.6 ? this.turf() : sharedMat(0x8a7a4a, 1)), true, 0, -0.12, 0.06);
       for (const x of [-0.5, 0.5]) for (const side of [-1, 1]) {
         const horn = block(building, 0.03, 0.18, 0.03, x, h + 0.36, -0.12 + side * 0.05, sharedMat(this.theme.accent, 0.8));
         horn.rotation.x = side * 0.6;
@@ -508,7 +512,7 @@ export class HomeKit {
     }
     for (const cx of [-0.18, 0.08]) this.chimney(building, x + cx, h + 0.04, z - 0.2);
     addGadgets(building, this.random, h + 0.06, w, d, x + 0.05, z + 0.05, era);
-    if (this.themeId === "japan" || this.themeId === "norse") this.themeTouch(building, w, d, h + 0.06, x, z, floors, fh);
+    if (this.style === "japan" || this.style === "norse") this.themeTouch(building, w, d, h + 0.06, x, z, floors, fh);
     if (era >= 5) this.solar(building, 0.3, 0.3, h + 0.07, x + 0.1, z + 0.12);
     this.tree(building, 0.38, 0.38, 0.8);
   }

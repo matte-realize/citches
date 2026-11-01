@@ -125,6 +125,8 @@ export class ChatCity {
   private streetCells = new Map<string, NetCell>();
   private life: CityLife;
   private homes: HomeKit;
+  /** Architecture family of the current theme. */
+  private get style() { return this.theme.style; }
   private specials: SpecialKit;
   /** Spinning sails, blinking beacons and chimney smoke, tied to the building they belong to. */
   private animated: Array<{ tile: Tile; building: Group; part: Animated }> = [];
@@ -784,12 +786,12 @@ export class ChatCity {
       return;
     }
     const hutStyle = Math.floor(this.random() * 4);
-    const woodColor = this.themeId === "norse" ? 0x493525 : this.themeId === "japan" ? 0x573c30 : 0x745133;
+    const woodColor = this.style === "norse" ? 0x493525 : this.style === "japan" ? 0x573c30 : 0x745133;
     const wood = mat(woodColor, 1);
     const wallColor = this.color(this.theme.house);
     const roofColor = this.color(this.theme.roof);
 
-    if (this.themeId === "norse") {
+    if (this.style === "norse") {
       this.box(building, 1.02, 0.12, 0.96, this.theme.stone, 0, 0.12, 0);
       this.box(building, 0.86, 0.58, 0.74, 0, 0, 0.47, 0, mat(wallColor, 1));
       for (const x of [-0.43, 0.43]) this.box(building, 0.08, 0.92, 0.08, 0, x, 0.58, 0, wood);
@@ -799,7 +801,7 @@ export class ChatCity {
       rightRoof.rotation.z = 0.61;
       this.box(building, 0.12, 0.12, 1.05, 0, 0, 1.22, 0, wood);
       this.box(building, 0.2, 0.4, 0.06, 0, 0, 0.34, 0.4, wood);
-    } else if (this.themeId === "japan") {
+    } else if (this.style === "japan") {
       this.box(building, 0.94, 0.1, 0.9, 0x704f3a, 0, 0.18, 0, wood);
       this.box(building, 0.78, 0.52, 0.66, 0, 0, 0.51, 0, mat(wallColor, 0.92));
       for (const x of [-0.36, 0.36]) for (const z of [-0.3, 0.3]) this.box(building, 0.055, 0.82, 0.055, 0, x, 0.55, z, wood);
@@ -809,7 +811,7 @@ export class ChatCity {
       rightRoof.rotation.z = 0.48;
       this.box(building, 0.2, 0.42, 0.055, 0, 0, 0.36, 0.35, wood);
       for (const x of [-0.38, 0.38]) this.box(building, 0.12, 0.045, 0.12, 0, x, 0.92, 0.38, mat(this.theme.accent, 0.65));
-    } else if (this.themeId === "rome") {
+    } else if (this.style === "rome") {
       this.box(building, 0.96, 0.12, 0.9, this.theme.stone, 0, 0.12, 0);
       this.box(building, 0.78, 0.56, 0.68, 0, 0, 0.48, 0, mat(wallColor, 1));
       for (const x of [-0.38, 0.38]) this.box(building, 0.07, 0.82, 0.07, 0, x, 0.57, 0, wood);
@@ -950,14 +952,14 @@ export class ChatCity {
   private capitolStage = 0;
 
   /** Theme name for a capitol stage, e.g. "Capitolium" or "Imperial Castle". */
-  capitolName(stage = this.capitolStage) { return CAPITOL_NAMES[capitolStyleFor(this.themeId)][Math.max(0, Math.min(5, stage))]; }
+  capitolName(stage = this.capitolStage) { return (CAPITOL_NAMES[this.themeId] ?? CAPITOL_NAMES[this.style])[Math.max(0, Math.min(5, stage))]; }
 
   private setCapitol(stage: number, donors: CapitolDonor[], historical: boolean) {
     const center = this.hearthTile;
     if (!center || stage <= this.capitolStage && this.capitolGroup) return;
     this.capitolStage = stage;
     if (this.capitolGroup) { this.root.remove(this.capitolGroup); disposeObject(this.capitolGroup); }
-    const { group, animated } = buildCapitol(stage, capitolStyleFor(this.themeId), this.theme, () => this.random(), donors);
+    const { group, animated } = buildCapitol(stage, capitolStyleFor(this.themeId, this.theme), this.theme, () => this.random(), donors, this.themeId);
     group.position.copy(center.group.position).setY(0);
     this.root.add(group);
     this.capitolGroup = group;
@@ -1321,7 +1323,7 @@ export class ChatCity {
 
   private makeThemeLandmark(building: Group, era: number, stone: MeshStandardMaterial) {
     const wood = mat(0x62462e, 1);
-    if (this.themeId === "egypt") {
+    if (this.style === "egypt") {
       this.box(building, 0.98, 0.18, 0.98, 0, 0, 0.16, 0, stone);
       if (era === 2) {
         this.box(building, 0.82, 0.42, 0.82, 0, 0, 0.43, 0, mat(0xcab477, 1));
@@ -1340,7 +1342,7 @@ export class ChatCity {
         const obelisk = new Mesh(new ConeGeometry(0.13, 1.0, 4), mat(this.theme.accent, 0.75));
         obelisk.position.set(0.3, 0.72, -0.3); building.add(obelisk);
       }
-    } else if (this.themeId === "rome") {
+    } else if (this.style === "rome") {
       this.box(building, 1.0, 0.24, 0.94, 0, 0, 0.2, 0, stone);
       if (era === 2) {
         for (const x of [-0.34, 0, 0.34]) {
@@ -1359,7 +1361,7 @@ export class ChatCity {
         this.box(building, 0.98, 0.18, 0.3, 0, 0, 2.03, 0.24, mat(this.theme.house[1], 0.85));
         this.box(building, 0.12, 0.42, 0.08, 0, 0, 2.32, 0.24, mat(this.theme.accent, 0.7));
       }
-    } else if (this.themeId === "norse") {
+    } else if (this.style === "norse") {
       this.box(building, 0.98, 0.18, 0.94, 0, 0, 0.16, 0, stone);
       if (era === 2) {
         this.box(building, 0.78, 0.76, 0.68, 0, 0, 0.63, 0, wood);
@@ -1393,21 +1395,21 @@ export class ChatCity {
 
   private addThemeDetails(building: Group, width: number, height: number, depth: number, era: number) {
     if (era <= 1) return;
-    if (this.themeId === "egypt") {
+    if (this.style === "egypt") {
       for (const x of [-width * 0.36, width * 0.36]) {
         const pilaster = new Mesh(new CylinderGeometry(0.035, 0.05, Math.min(height * 0.9, 2.4), 7), mat(0xc4a86f, 0.92));
         pilaster.position.set(x, height / 2 + 0.16, depth / 2 + 0.025); building.add(pilaster);
       }
       const lintel = this.box(building, width * 0.94, 0.07, 0.07, 0, 0, height + 0.19, depth / 2 + 0.035, mat(0xb18a4d, 0.85));
       lintel.receiveShadow = true;
-    } else if (this.themeId === "rome") {
+    } else if (this.style === "rome") {
       for (const x of [-width * 0.36, width * 0.36]) {
         const column = new Mesh(new CylinderGeometry(0.035, 0.05, Math.min(height * 0.9, 2.2), 8), mat(0xe0d3b5, 0.78));
         column.position.set(x, height / 2 + 0.16, depth / 2 + 0.04); building.add(column);
         this.box(building, 0.12, 0.055, 0.12, 0, x, height + 0.19, depth / 2 + 0.04, mat(0xd4c29f, 0.8));
       }
       this.box(building, width * 1.04, 0.075, 0.12, 0, 0, height + 0.24, depth / 2 + 0.04, mat(this.theme.roof[0], 0.86));
-    } else if (this.themeId === "norse") {
+    } else if (this.style === "norse") {
       for (const x of [-width * 0.4, width * 0.4]) {
         this.box(building, 0.055, height * 0.94, 0.06, 0, x, height / 2 + 0.16, depth / 2 + 0.035, mat(0x493525, 1));
       }

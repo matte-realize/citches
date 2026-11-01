@@ -8,7 +8,12 @@ export const THEME_HINTS: Record<CityThemeId, string> = {
   egypt: "Sandstone, palms and golden pyramids",
   rome: "Terracotta roofs, columns and domes",
   norse: "Timber halls, turf roofs and runes",
-  japan: "Tiled eaves, torii gates and lanterns"
+  japan: "Tiled eaves, torii gates and lanterns",
+  aztec: "Jade temples, stepped pyramids and totems",
+  arabian: "White walls, turquoise domes and minarets",
+  greek: "Whitewash, sea-blue domes and olive groves",
+  medieval: "Stone keeps, slate roofs and red banners",
+  china: "Vermilion halls and green-glazed roofs"
 };
 
 export const themeOptions = (): PixelOption[] => (Object.keys(CITY_THEMES) as CityThemeId[]).map(id => {

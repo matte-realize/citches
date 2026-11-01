@@ -37,6 +37,7 @@ export function makePerson(random: Random, era: number, themeId: CityThemeId, th
   const root = new Group();
   const body = new Group();
   root.add(body);
+  const style = theme.style;
   const skin = sharedMat(pick(random, SKIN), 1);
   const modern = era >= 4;
   const clothColor = random() < 0.25 ? theme.accent : pick(random, modern ? MODERN_CLOTH : EARLY_CLOTH);
@@ -47,7 +48,7 @@ export function makePerson(random: Random, era: number, themeId: CityThemeId, th
 
   // Torso and, for robe-wearing eras, a flared skirt.
   place(body, cylinderGeo(0.062, 0.082, 0.2, 7), cloth, 0, 0.29, 0);
-  if (!modern && (themeId === "egypt" || themeId === "rome" || themeId === "japan" || random() < 0.3)) {
+  if (!modern && (style === "egypt" || style === "rome" || style === "japan" || random() < 0.3)) {
     place(body, cylinderGeo(0.08, 0.11, 0.12, 7), cloth, 0, 0.17, 0);
   }
   if (random() < 0.3) place(body, sphereGeo(0.035, 6, 4), sharedMat(modern ? pick(random, MODERN_CLOTH) : 0x6b4a2e, 1), 0, 0.3, -0.075); // satchel / backpack
@@ -60,11 +61,11 @@ export function makePerson(random: Random, era: number, themeId: CityThemeId, th
   hair.scale.set(1.02, 0.62, 1.04);
   // Era and theme hats give crowds some silhouette variety.
   const hatRoll = random();
-  if (!modern && themeId === "japan" && hatRoll < 0.4) {
+  if (!modern && style === "japan" && hatRoll < 0.4) {
     place(head, coneGeo(0.13, 0.06, 10), sharedMat(0xc9a86a, 1), 0, 0.07, 0);
-  } else if (!modern && themeId === "norse" && hatRoll < 0.35) {
+  } else if (!modern && style === "norse" && hatRoll < 0.35) {
     place(head, sphereGeo(0.075, 8, 5), sharedMat(0x7a6650, 1), 0, 0.035, 0).scale.set(1, 0.75, 1);
-  } else if (!modern && themeId === "egypt" && hatRoll < 0.4) {
+  } else if (!modern && style === "egypt" && hatRoll < 0.4) {
     block(head, 0.15, 0.05, 0.14, 0, 0.04, -0.01, sharedMat(0xe8dcc0, 1));
     block(head, 0.15, 0.1, 0.03, 0, -0.03, -0.06, sharedMat(0xe8dcc0, 1));
   } else if (modern && hatRoll < 0.22) {

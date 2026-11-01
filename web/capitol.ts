@@ -9,7 +9,12 @@ type Random = () => number;
 export type CapitolStyle = "egypt" | "rome" | "norse" | "japan";
 
 /** Theme names for each capitol stage (index = stage, 0 is the bare campfire). */
-export const CAPITOL_NAMES: Record<CapitolStyle, string[]> = {
+export const CAPITOL_NAMES: Record<string, string[]> = {
+  aztec: ["Campfire", "Gathering Circle", "Calpulli House", "Hall of Warriors", "Templo Mayor", "Great Temple of the Sun"],
+  arabian: ["Campfire", "Gathering Circle", "Majlis", "Grand Bazaar", "Palace", "Sultan's Palace"],
+  greek: ["Campfire", "Gathering Circle", "Bouleuterion", "Stoa", "Agora", "Acropolis"],
+  medieval: ["Campfire", "Gathering Circle", "Moot Hall", "Guildhall", "Castle", "Royal Castle"],
+  china: ["Campfire", "Gathering Circle", "Ancestral Hall", "Hall of Harmony", "Palace", "Forbidden Palace"],
   egypt: ["Campfire", "Gathering Circle", "House of Elders", "Hall of Pillars", "Temple Complex", "Temple of the Sun"],
   rome: ["Campfire", "Gathering Circle", "Curia", "Basilica", "Forum", "Capitolium"],
   norse: ["Campfire", "Gathering Circle", "Longhall", "Thing Hall", "Great Hall", "Great Mead Hall"],
@@ -22,7 +27,7 @@ export const CAPITOL_NAMES: Record<CapitolStyle, string[]> = {
  * grows as a U around the plaza: a back wing, then side wings, then towers, domes and banners.
  * Coordinates are relative to the block centre; +z faces the main street.
  */
-export function buildCapitol(stage: number, style: CapitolStyle, theme: CityTheme, random: Random, donors: CapitolDonor[] = []) {
+export function buildCapitol(stage: number, style: CapitolStyle, theme: CityTheme, random: Random, donors: CapitolDonor[] = [], themeId?: CityThemeId) {
   const group = new Group();
   const animated: Animated[] = [];
   const windows = new Batcher();
@@ -77,7 +82,19 @@ export function buildCapitol(stage: number, style: CapitolStyle, theme: CityThem
   }
   // Stage 4+: the grand centrepiece rising over the back wing, and gate pillars.
   if (stage >= 4) {
-    centrepiece(group, style, theme, roof, stone, gold, accent, stage, animated);
+    centrepiece(group, style, theme, roof, stone, gold, accent, stage, animated, themeId);
+    if (themeId === "medieval") {
+      // Crenellated corner towers turn the hall into a castle.
+      for (const [x, z] of [[-1.35, -1.35], [1.35, -1.35], [-1.35, 0.75], [1.35, 0.75]] as const) {
+        place(group, cylinderGeo(0.2, 0.22, 1.2 + stage * 0.1, 10), stone, x, (1.2 + stage * 0.1) / 2, z);
+        for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; block(group, 0.08, 0.1, 0.08, x + Math.sin(a) * 0.17, 1.25 + stage * 0.1, z + Math.cos(a) * 0.17, stone); }
+      }
+    }
+    if (themeId === "arabian") for (const x of [-1.35, 1.35]) {
+      place(group, cylinderGeo(0.06, 0.08, 2.0, 10), wall, x, 1.0, -1.3);
+      place(group, cylinderGeo(0.09, 0.09, 0.05, 10), stone, x, 1.6, -1.3);
+      place(group, sphereGeo(0.09, 8, 6), roof, x, 2.08, -1.3).scale.set(1, 1.4, 1);
+    }
     // Gate pillars flank the path in from the main street.
     for (const x of [-0.42, 0.42]) {
       block(group, 0.14, 0.6, 0.14, x, 0.3, 1.2, stone);
@@ -142,9 +159,14 @@ function sideRoof(group: Group, style: CapitolStyle, x: number, y: number, roof:
   gable.scale.set(0.66, style === "norse" ? 0.4 : 0.22, 1.98);
 }
 
-function centrepiece(group: Group, style: CapitolStyle, theme: CityTheme, roof: Material, stone: Material, gold: Material, accent: Material, stage: number, animated: Animated[]) {
+function centrepiece(group: Group, style: CapitolStyle, theme: CityTheme, roof: Material, stone: Material, gold: Material, accent: Material, stage: number, animated: Animated[], themeId?: CityThemeId) {
   const big = stage >= 5 ? 1.25 : 1;
-  if (style === "egypt") {
+  if (themeId === "aztec") {
+    // Templo Mayor: five stepped tiers with a twin temple on top.
+    let y = 1.13, w = 1.5 * big;
+    for (let i = 0; i < 5; i++) { block(group, w, 0.2, Math.min(0.62, w * 0.5), 0, y + 0.1, -1.15, sharedMat(i % 2 ? 0xb88e62 : 0xc9a878, 0.85)); y += 0.2; w *= 0.8; }
+    for (const x of [-0.14, 0.14]) { block(group, 0.22, 0.2, 0.24, x, y + 0.1, -1.15, sharedMat(0xc9553f, 0.8)); block(group, 0.26, 0.04, 0.28, x, y + 0.22, -1.15, accent); }
+  } else if (style === "egypt") {
     // A pyramid behind the temple, capped in gold at the final stage.
     const pyramid = place(group, pyramidGeo(), sharedMat(tint(0xd8c08b, () => 0.5), 0.8), 0, 1.13, -1.15);
     pyramid.scale.set(1.3 * big, 1.1 * big, 0.62);
@@ -152,8 +174,9 @@ function centrepiece(group: Group, style: CapitolStyle, theme: CityTheme, roof: 
     cap.scale.set(0.26 * big, 0.2 * big, 0.12);
   } else if (style === "rome") {
     place(group, cylinderGeo(0.42 * big, 0.44 * big, 0.3, 18), stone, 0, 1.28, -1.15);
-    const dome = place(group, sphereGeo(0.44 * big, 16, 8), sharedMat(0x5f9e8a, 0.5, { metalness: 0.4 }), 0, 1.42, -1.15);
-    dome.scale.set(1, 0.75, 1);
+    const domeColor = themeId === "arabian" ? theme.roof[0] : themeId === "greek" ? theme.roof[0] : 0x5f9e8a;
+    const dome = place(group, sphereGeo(0.44 * big, 16, 8), sharedMat(domeColor, 0.5, { metalness: 0.4 }), 0, 1.42, -1.15);
+    dome.scale.set(1, themeId === "arabian" ? 1.25 : 0.75, 1);
     place(group, cylinderGeo(0.06, 0.08, 0.16, 8), stage >= 5 ? gold : stone, 0, 1.42 + 0.34 * big, -1.15);
   } else if (style === "norse") {
     // A stave tower with stacked steep roofs.
@@ -171,7 +194,7 @@ function centrepiece(group: Group, style: CapitolStyle, theme: CityTheme, roof: 
     block(group, 0.9 * big, 0.36, 0.6, 0, 1.6, -1.15, stone);
     let y = 1.78, w = 0.8 * big;
     for (let i = 0; i < (stage >= 5 ? 4 : 3); i++) {
-      block(group, w, 0.28, Math.min(0.56, w), 0, y + 0.14, -1.15, sharedMat(0xf2eee2, 0.8));
+      block(group, w, 0.28, Math.min(0.56, w), 0, y + 0.14, -1.15, sharedMat(themeId === "china" ? 0xb03a32 : 0xf2eee2, 0.8));
       block(group, w + 0.24, 0.035, Math.min(0.56, w) + 0.24, 0, y + 0.3, -1.15, roof);
       block(group, w + 0.26, 0.015, Math.min(0.56, w) + 0.26, 0, y + 0.325, -1.15, accent);
       y += 0.34; w *= 0.8;
@@ -185,4 +208,5 @@ function centrepiece(group: Group, style: CapitolStyle, theme: CityTheme, roof: 
   }
 }
 
-export const capitolStyleFor = (themeId: CityThemeId | string): CapitolStyle => (["egypt", "rome", "norse", "japan"].includes(themeId) ? themeId : "rome") as CapitolStyle;
+/** Which capitol architecture a theme uses: domed palaces for the Sultanate, the family otherwise. */
+export const capitolStyleFor = (themeId: CityThemeId, theme: CityTheme): CapitolStyle => (themeId === "arabian" ? "rome" : theme.style);

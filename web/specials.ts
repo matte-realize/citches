@@ -21,9 +21,9 @@ export type SpecialStyle =
 
 /** Swap generic buildings for ones that belong to each civilization. */
 const THEMED: Partial<Record<SpecialStyle, Partial<Record<CityThemeId, SpecialStyle>>>> = {
-  totem: { egypt: "obelisk", rome: "shrine", norse: "runestone", japan: "torii" },
-  windmill: { egypt: "granary", rome: "aqueduct", japan: "waterwheel" },
-  fountain: { egypt: "oasis", japan: "koiPond" }
+  totem: { egypt: "obelisk", rome: "shrine", norse: "runestone", japan: "torii", aztec: "totem", medieval: "shrine", china: "shrine" },
+  windmill: { egypt: "granary", rome: "aqueduct", japan: "waterwheel", arabian: "windmill", medieval: "windmill", greek: "windmill" },
+  fountain: { egypt: "oasis", japan: "koiPond", aztec: "fountain", arabian: "fountain", china: "koiPond" }
 };
 
 export const SPECIALS_BY_ERA: SpecialStyle[][] = [
@@ -44,6 +44,7 @@ export const SPECIALS_BY_ERA: SpecialStyle[][] = [
 export class SpecialKit {
   private recent: SpecialStyle[] = [];
   constructor(private random: Random, private theme: CityTheme, private themeId: CityThemeId) {}
+  private get style() { return this.theme.style; }
 
   private pick<T>(list: readonly T[]): T { return list[Math.floor(this.random() * list.length)]; }
   private wall() { return sharedMat(tint(this.pick(this.theme.house), this.random, 0.03, 0.1), 0.86); }
@@ -62,7 +63,9 @@ export class SpecialKit {
   }
 
   build(building: Group, era: number, chosen = this.choose(era)): Animated[] {
-    const style = THEMED[chosen]?.[this.themeId] ?? chosen;
+    // A theme's own pick wins; otherwise its architecture family's; otherwise the generic one.
+    const own = THEMED[chosen] as Partial<Record<string, SpecialStyle>> | undefined;
+    const style = own?.[this.themeId] ?? own?.[this.theme.style] ?? chosen;
     const animated: Animated[] = [];
     const batch = new Batcher();
     (this[style] as (b: Group, a: Animated[], batch: Batcher, era: number) => void).call(this, building, animated, batch, era);
@@ -333,7 +336,7 @@ export class SpecialKit {
 
   private stadium(b: Group, a: Animated[]) {
     block(b, 0.98, 0.02, 0.98, 0, 0.01, 0, sharedMat(0x5f6458, 1), 0, false);
-    const colosseum = this.themeId === "rome";
+    const colosseum = this.style === "rome";
     const shell = place(b, cylinderGeo(0.48, 0.44, colosseum ? 0.34 : 0.26, 20), sharedMat(colosseum ? 0xd1c2a0 : this.theme.accent, 0.7), 0, colosseum ? 0.17 : 0.13, 0);
     if (colosseum) for (let i = 0; i < 16; i++) {
       const angle = (i / 16) * Math.PI * 2;

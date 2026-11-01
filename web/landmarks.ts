@@ -33,8 +33,9 @@ export function buildModernLandmark(building: Group, themeId: CityThemeId, theme
   };
   const door = (w: number, z: number, material: Material) => block(building, w, 0.26, 0.03, 0, 0.13, z, material);
   const fh = 0.3;
+  const style = theme.style;
 
-  if (themeId === "egypt") {
+  if (style === "egypt") {
     // Sandstone tiers narrowing upward with a gold pyramidion; teal glass bands.
     const sand = sharedMat(tint(0xd3ae72, random, 0.02, 0.06), 0.8);
     const tiers = tall ? 5 : 3;
@@ -47,11 +48,26 @@ export function buildModernLandmark(building: Group, themeId: CityThemeId, theme
       block(building, w + 0.04, 0.04, w + 0.04, 0, y + h + 0.02, 0, sharedMat(theme.accent, 0.6));
       y += h; w *= 0.8;
     }
-    const cap = place(building, pyramidGeo(), sharedMat(0xffd35a, 0.3, { metalness: 0.7, emissive: 0x7a5a10, emissiveIntensity: 0.5 }), 0, y, 0);
-    cap.scale.set(w + 0.06, w * 0.9, w + 0.06);
+    if (themeId === "aztec") {
+      // Stepped pyramid crowned with a red-roofed temple.
+      block(building, w * 0.7, 0.24, w * 0.6, 0, y + 0.12, 0, sharedMat(0xc9553f, 0.8));
+      block(building, w * 0.8, 0.05, w * 0.7, 0, y + 0.265, 0, sharedMat(theme.accent, 0.7));
+    } else if (themeId === "arabian") {
+      // Onion dome and a pair of minarets.
+      const dome = place(building, sphereGeo(w * 0.42, 12, 8), sharedMat(theme.roof[0], 0.4, { metalness: 0.3 }), 0, y + w * 0.3, 0);
+      dome.scale.set(1, 1.35, 1);
+      place(building, cylinderGeo(0.01, 0.03, 0.2, 6), sharedMat(0xffd35a, 0.3, { metalness: 0.7 }), 0, y + w * 0.9, 0);
+      for (const x of [-0.38, 0.38]) {
+        place(building, cylinderGeo(0.04, 0.05, y + 0.5, 8), sand, x, (y + 0.5) / 2, -0.36);
+        place(building, sphereGeo(0.06, 8, 5), sharedMat(theme.roof[0], 0.4), x, y + 0.55, -0.36).scale.set(1, 1.4, 1);
+      }
+    } else {
+      const cap = place(building, pyramidGeo(), sharedMat(0xffd35a, 0.3, { metalness: 0.7, emissive: 0x7a5a10, emissiveIntensity: 0.5 }), 0, y, 0);
+      cap.scale.set(w + 0.06, w * 0.9, w + 0.06);
+    }
     for (const x of [-0.36, 0.36]) { const ob = place(building, cylinderGeo(0.03, 0.05, 0.5, 4), sand, x, 0.25, 0.4); ob.rotation.y = Math.PI / 4; }
     door(0.2, 0.44, sharedMat(0x3a2f26, 0.8));
-  } else if (themeId === "rome") {
+  } else if (style === "rome") {
     // Arcaded travertine base, columned middle and a copper dome.
     const travertine = sharedMat(tint(0xe0cda6, random, 0.02, 0.05), 0.75);
     const baseH = 0.5;
@@ -66,12 +82,13 @@ export function buildModernLandmark(building: Group, themeId: CityThemeId, theme
       place(building, cylinderGeo(0.025, 0.03, 0.4, 8), sharedMat(0xf0e6cc, 0.7), Math.sin(angle) * 0.3, baseH + h + 0.2, Math.cos(angle) * 0.3);
     }
     block(building, 0.72, 0.05, 0.72, 0, baseH + h + 0.42, 0, travertine);
-    const dome = place(building, sphereGeo(0.32, 14, 8), sharedMat(0x5f9e8a, 0.5, { metalness: 0.4 }), 0, baseH + h + 0.44, 0);
+    const dome = place(building, sphereGeo(0.32, 14, 8), sharedMat(themeId === "greek" ? theme.roof[0] : 0x5f9e8a, 0.5, { metalness: themeId === "greek" ? 0.1 : 0.4 }), 0, baseH + h + 0.44, 0);
     dome.scale.set(1, 0.7, 1);
     place(building, sphereGeo(0.04, 6, 4), sharedMat(0xffd35a, 0.3, { metalness: 0.7 }), 0, baseH + h + 0.68, 0);
-  } else if (themeId === "norse") {
+  } else if (style === "norse") {
     // Dark timber and steel stave tower with stacked steep roofs and dragon-head gables.
-    const timber = sharedMat(tint(0x5d483a, random, 0.02, 0.06), 0.9);
+    // Medieval keeps are stone; Norse stave towers are timber.
+    const timber = sharedMat(tint(themeId === "medieval" ? 0x8a8880 : 0x5d483a, random, 0.02, 0.06), 0.9);
     const stages = tall ? 4 : 2;
     let y = 0, w = 0.8;
     for (let i = 0; i < stages; i++) {
@@ -80,7 +97,7 @@ export function buildModernLandmark(building: Group, themeId: CityThemeId, theme
       block(building, w, h, w, 0, y + h / 2, 0, timber);
       grid(0, 0, w, w, y, floors, fh);
       for (let k = 0; k < 5; k++) block(building, 0.02, h, 0.012, -w / 2 + 0.06 + (k * (w - 0.12)) / 4, y + h / 2, w / 2 + 0.008, sharedMat(0x2f241c, 1), 0, false);
-      const roof = place(building, prismGeo(), sharedMat(i % 2 ? 0x3a4440 : 0x5f7a45, 0.9), 0, y + h, 0);
+      const roof = place(building, prismGeo(), sharedMat(themeId === "medieval" ? theme.roof[i % 2] : i % 2 ? 0x3a4440 : 0x5f7a45, 0.9), 0, y + h, 0);
       roof.scale.set(w + 0.14, 0.28, w + 0.14);
       for (const side of [-1, 1]) {
         const horn = block(building, 0.03, 0.14, 0.03, 0, y + h + 0.3, side * (w / 2 + 0.07), sharedMat(theme.accent, 0.8));
@@ -97,7 +114,7 @@ export function buildModernLandmark(building: Group, themeId: CityThemeId, theme
     const tile = sharedMat(tint(theme.roof[0], random, 0.02, 0.05), 0.8);
     for (let i = 0; i < levels; i++) {
       const h = fh * (i === 0 ? 1.3 : 1);
-      block(building, w, h, w, 0, y + h / 2, 0, sharedMat(i % 3 === 0 ? 0xd5bd92 : 0xc8aa82, 0.8));
+      block(building, w, h, w, 0, y + h / 2, 0, sharedMat(themeId === "china" ? (i % 3 === 0 ? 0xd8c8a8 : 0xb03a32) : i % 3 === 0 ? 0xd5bd92 : 0xc8aa82, 0.8));
       grid(0, 0, w, w, y, 1, h);
       block(building, w + 0.22, 0.035, w + 0.22, 0, y + h + 0.02, 0, tile);
       block(building, w + 0.24, 0.015, w + 0.24, 0, y + h + 0.045, 0, sharedMat(0xc0392b, 0.7));
