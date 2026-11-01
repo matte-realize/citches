@@ -133,7 +133,7 @@ export class ChatCity {
       cityRadius: () => this.activeRadius
     }, this.theme, themeId);
     // Render the city at low resolution and upscale with nearest-neighbour for a true pixel-art look.
-    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 2));
+    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 1));
     this.renderer = new WebGLRenderer({ antialias: this.pixelSize === 1, alpha: true, premultipliedAlpha: true });
     this.renderer.setPixelRatio(this.pixelSize === 1 ? Math.min(window.devicePixelRatio, 2) : 1 / this.pixelSize);
     this.renderer.shadowMap.enabled = true;

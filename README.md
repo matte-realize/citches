@@ -39,7 +39,7 @@ Points accumulate into the on-screen **CITY POINTS** counter, and each tick's bi
 
 The plot is laid out in planned blocks: streets run every four tiles, so each block is eight street-facing lots around a backyard tile (trees, vegetable plots or a sheep paddock). The founding campfire sits in the central block as an open plaza. New homes go to the best lot: infill on streets that already exist first, then compact growth outward, finishing partly built blocks before starting new ones; landmarks prefer corner lots. Every home's front door faces its street.
 
-The 3D scene renders at low resolution and is upscaled with nearest-neighbour filtering for a pixel-art look. `?pixel=2` (default; `1.5` in overlay mode) sets how many screen pixels each rendered pixel covers, and `?pixel=1` turns it off.
+The 3D scene renders smooth and anti-aliased by default. For a retro pixel-art render, add `?pixel=2` (or higher): the scene is drawn at lower resolution and upscaled with nearest-neighbour filtering.
 
 ## Twitch extension overlay
 
