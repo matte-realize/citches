@@ -35,6 +35,17 @@ Every message runs through a list of scoring rules (`src/score/rules.ts`). Each 
 
 Points accumulate into the on-screen **CITY POINTS** counter, and each tick's biggest reasons float up from the city as `+1.4 KINDNESS` / `-1.6 COPYPASTA` pops. Destruction mirrors construction: minus points fill the **DANGER** meter (`config.threat`), pluses drain it, and every time it fills a building is knocked down. These are paced pulses of one or two buildings, like build pulses, instead of one big disaster at the end. The dominant kind of negativity picks how it falls, and the attack grows with the damage: all caps calls lightning and spam, copypasta or floods call a locust swarm at any size, while toxic chat starts as a fire and escalates to a meteor once three buildings are at stake. Because haters are usually a small minority, each minus hits the meter harder when negativity is rare (`rarityBoost`). The community fights back by out-building the damage and draining the meter: emptying a meter that was at least half full earns a `HATERS WASHED OUT` bonus. Outskirts homes are hit before the old centre and landmarks. Demolition plays the build animation in reverse, stepping down in chunky layers. Minuses also slightly slow technology progress, but never undo a milestone that was already reached. Only hate keywords trigger a big disaster and a recovery period.
 
+### Calibrating the danger system
+
+The danger threshold adapts to each chat: knocking a building down costs a share (`adaptiveShare`) of the community's plus points from the last minute and a half, clamped between `minThreshold` and `maxThreshold`. Big, fast chats need more negativity to do damage, and small, friendly ones feel a few trolls. Attacks are spaced at least `cooldownMs` apart, so each one is an event of a few buildings rather than constant single losses.
+
+```sh
+npm run calibrate                      # every log in logs/
+npm run calibrate -- logs/xqc-*.jsonl
+```
+
+`calibrate` replays real chat logs through the same pipeline on message time (hours in seconds) and checks attack spacing, attack size, the worst minute, whether the city keeps growing, and losses per build against `config.calibration`. Live mode records every chat it reads into `logs/`, so the check gets better the more streams it has seen. Retune `config.threat` and rerun until all targets are met.
+
 ## Town planning
 
 The plot is laid out in planned blocks: streets run every four tiles, so each block is eight street-facing lots around a backyard tile (trees, vegetable plots or a sheep paddock). The founding campfire sits in the central block as an open plaza. New homes go to the best lot: infill on streets that already exist first, then compact growth outward, finishing partly built blocks before starting new ones; landmarks prefer corner lots. Every home's front door faces its street.
@@ -56,7 +67,7 @@ What you will see:
 - The city is named after the channel, and the scoreboard lists its **top builders**.
 - Builds pop up credited to the chatters whose messages paid for them, for example `+1 HOME by name & name`.
 - Villagers repeat wholesome chat messages in speech bubbles.
-- Every few homes the district gets a civic building for its era: wells, stalls and totems; windmills, smithies, fountains and watchtowers; factories, water towers, gas stations and arcades; radio towers, wind turbines, data centres, stadiums and solar farms.
+- Every few homes the district gets a civic building for its era: wells, stalls and totems; windmills, smithies, fountains and watchtowers; factories, water towers, gas stations and arcades; radio towers, wind turbines, data centres, stadiums and solar farms. Each civilization swaps in its own versions: obelisks, granaries and palm oases on the Nile; shrines, aqueducts and a colosseum in Rome; rune stones in the Norse lands; torii gates, water-wheel mills and koi ponds in Japan. Industrial-era landmarks and skyscrapers are themed too: sandstone tiers with gold pyramidions, travertine towers with copper domes, timber stave towers with dragon gables, and modern pagodas.
 - Streets fill with devices (traffic lights that cycle, phone booths, vending machines, mailboxes, hydrants, bus stops, benches, EV chargers), and modern roofs get dishes, antennas, AC units and drones.
 - Chimneys smoke, birds fly over, builds kick up dust and sparkles, and every new era gets a fireworks show.
 
@@ -65,6 +76,8 @@ The web app has the same view: `/?channel=<name>` reads a channel's chat directl
 ## Twitch extension overlay
 
 `overlay.html` is the Twitch video-overlay entry point. It loads the Twitch Extension Helper, renders with a transparent background, floats the plot as a small island in a corner of the stream, and shows the score bar in pixel type. Any page also accepts `?overlay=1` to preview overlay mode locally; `&corner=bl|br|center` moves the city and `&zoom=1.5` scales it.
+
+**Only the streamer chooses the look.** `config.html` is the extension's broadcaster configuration page, which Twitch shows only to the channel owner. It sets the civilization, corner, size and backend address in Twitch's configuration service. The overlay reads those settings for every viewer and has no picker of its own, and it reloads if the streamer changes them mid-stream. (The browser extension's popup is only a demo and testing tool.)
 
 For the overlay to work live, the backend acts as the Extension Backend Service:
 

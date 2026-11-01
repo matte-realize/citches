@@ -3,13 +3,27 @@ import "@fontsource/pixelify-sans/700.css";
 import "@fontsource/press-start-2p/400.css";
 import { ChatCity, themeFromSearch } from "./city.js";
 import { CityHud } from "./hud.js";
+import { pixelSelect, themeOptions } from "./dropdown.js";
+import "./dropdown.css";
 import { TwitchChatFeed } from "./chat.js";
-import { DemoFeed, TwitchExtensionFeed, WebSocketFeed } from "./transport.js";
+import { DemoFeed, TwitchExtensionFeed, WebSocketFeed, readBroadcasterConfig, waitForBroadcasterConfig } from "./transport.js";
 import type { CityFeed, CityTick } from "./transport.js";
 import "./style.css";
 
 const params = new URLSearchParams(location.search);
 const extension = TwitchExtensionFeed.available();
+// On Twitch the streamer chooses the theme on the extension's configuration page; viewers cannot.
+const broadcaster = extension ? await waitForBroadcasterConfig() : {};
+if (extension) {
+  if (broadcaster.theme) params.set("theme", broadcaster.theme);
+  if (broadcaster.corner) params.set("corner", broadcaster.corner);
+  if (broadcaster.size) params.set("size", broadcaster.size);
+  // If the streamer changes the look mid-stream, rebuild with it.
+  window.Twitch!.ext.configuration.onChanged(() => {
+    const next = readBroadcasterConfig();
+    if (next.theme !== broadcaster.theme || next.corner !== broadcaster.corner || next.size !== broadcaster.size) location.reload();
+  });
+}
 // Overlay mode: transparent canvas, the city floats in a corner over the stream.
 // ?channel=<name> reads that channel's chat directly in the browser (used by the browser extension).
 const chatChannel = params.get("channel")?.toLowerCase().replace(/[^a-z0-9_]/g, "");
@@ -20,7 +34,7 @@ document.documentElement.dataset.corner = params.get("corner") ?? "br";
 document.documentElement.dataset.size = params.get("size") ?? "medium";
 
 const host = document.querySelector<HTMLDivElement>("#app")!;
-const city = new ChatCity(host, themeFromSearch(), {
+const city = new ChatCity(host, themeFromSearch(`?${params}`), {
   transparent: overlay,
   zoom: Number(params.get("zoom")) || (overlay ? 1.25 : 1),
   pixelSize: Number(params.get("pixel")) || 1.5,
@@ -63,15 +77,13 @@ document.body.appendChild(status);
 if (!overlay) {
   const panel = document.createElement("div");
   panel.className = "debug";
-  panel.innerHTML = '<div class="debug-title"><span class="live-dot"></span>CHAT CITY</div><div class="debug-stage"></div><label class="theme-picker">CIV <select aria-label="Choose civilization theme"><option value="egypt">Nile Kingdom</option><option value="rome">Roman Republic</option><option value="norse">Norse Settlement</option><option value="japan">Imperial Japan</option></select></label><div class="debug-rate">…</div><div class="debug-counts"></div>';
+  panel.innerHTML = '<div class="debug-title"><span class="live-dot"></span>CHAT CITY</div><div class="debug-stage"></div><div class="theme-picker"><span>CIV</span></div><div class="debug-rate">…</div><div class="debug-counts"></div>';
   document.body.appendChild(panel);
-  const picker = panel.querySelector<HTMLSelectElement>("select")!;
-  picker.value = city.selectedThemeId;
-  picker.addEventListener("change", () => {
+  panel.querySelector(".theme-picker")!.appendChild(pixelSelect(themeOptions(), city.selectedThemeId, theme => {
     const url = new URL(location.href);
-    url.searchParams.set("theme", picker.value);
+    url.searchParams.set("theme", theme);
     location.assign(url);
-  });
+  }, "Choose civilization theme"));
 }
 const stage = document.querySelector<HTMLDivElement>(".debug-stage");
 const rate = document.querySelector<HTMLDivElement>(".debug-rate");

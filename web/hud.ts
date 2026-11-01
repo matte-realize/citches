@@ -53,6 +53,7 @@ export class CityHud {
   private popQueue: Array<{ label: string; points: number; unit?: string; credit?: boolean }> = [];
   private lastPopAt = 0;
   private live = 0;
+  private slot = 0;
 
   constructor(private options: HudOptions) {
     const board = el("section", "scoreboard");
@@ -172,10 +173,14 @@ export class CityHud {
     const anchor = this.options.screenPoint();
     const node = el("div", `pop ${pop.points >= 0 ? "pop-plus" : "pop-minus"}${pop.unit ? " pop-wreck" : ""}${pop.credit ? " pop-credit" : ""}`);
     node.append(el("span", "pop-points", `${pop.points >= 0 ? "+" : ""}${pop.points}${pop.unit ? ` ${pop.unit}` : ""}`), el("span", "pop-label", pop.label));
-    const spread = this.options.overlay ? 70 : 120;
+    // Fan pops out into six slots around the anchor so bursts never stack on top of each other.
+    const spread = this.options.overlay ? 60 : 110;
+    const slot = this.slot++ % 6;
     const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
-    node.style.left = `${clamp(anchor.x + (Math.random() - 0.5) * spread * 2, 90, innerWidth - 90)}px`;
-    node.style.top = `${clamp(anchor.y + (Math.random() - 0.5) * spread * 0.6, 60, innerHeight - 160)}px`;
+    const dx = (slot % 3 - 1) * spread * 1.1 + (Math.random() - 0.5) * spread * 0.3;
+    const dy = (slot < 3 ? -1 : 1) * spread * 0.32 + (Math.random() - 0.5) * 10;
+    node.style.left = `${clamp(anchor.x + dx, 90, innerWidth - 90)}px`;
+    node.style.top = `${clamp(anchor.y + dy, 60, innerHeight - 160)}px`;
     node.style.setProperty("--tilt", `${(Math.random() - 0.5) * 16}deg`);
     this.popLayer.appendChild(node);
     this.live++;

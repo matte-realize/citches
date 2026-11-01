@@ -1,12 +1,14 @@
 :root { --ink: #10141c; --panel: #1b2433; --panel-hi: #2a3850; --text: #f4ecd8; --muted: #a9b7c6; --gold: #ffd35a; --gold-deep: #b7791f; }
 * { box-sizing: border-box; }
-body { margin: 0; width: 280px; background: var(--panel); color: var(--text); font-family: "Pixelify Sans", monospace; -webkit-font-smoothing: none; }
+body { margin: 0; width: 300px; background: var(--panel); color: var(--text); font-family: "Pixelify Sans", monospace; -webkit-font-smoothing: none; }
 .popup { padding: 16px; box-shadow: inset 0 4px 0 var(--panel-hi), inset 0 -4px 0 #121925; }
 h1 { margin: 0 0 6px; font: 14px "Press Start 2P", monospace; color: var(--gold); text-shadow: 2px 2px 0 var(--gold-deep), 4px 4px 0 var(--ink); }
 .where { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
 .where b { color: var(--text); }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; font-size: 15px; }
-select { font: 14px "Pixelify Sans", monospace; color: var(--text); background: var(--panel-hi); border: 0; padding: 5px 8px; box-shadow: 0 0 0 3px var(--ink); }
+.row .pixel-select { width: 140px; }
+.field { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 14px; font-size: 15px; }
+body { min-height: 470px; }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: #4fc46b; }
 .reset { width: 100%; margin-top: 8px; padding: 8px; font: 9px "Press Start 2P", monospace; color: var(--text); background: #6b2a2f; border: 0; box-shadow: 0 0 0 3px var(--ink), inset 0 -3px 0 #4a1c20; cursor: pointer; }
 .reset:hover { background: #82343a; }

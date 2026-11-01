@@ -25,8 +25,27 @@ export class WebSocketFeed implements CityFeed {
 type TwitchExt = {
   onAuthorized(callback: (auth: { channelId: string; token: string }) => void): void;
   listen(target: string, callback: (target: string, contentType: string, message: string) => void): void;
-  configuration: { broadcaster?: { content: string }; onChanged(callback: () => void): void };
+  configuration: { broadcaster?: { content: string }; onChanged(callback: () => void): void; set(segment: "broadcaster", version: string, content: string): void };
 };
+
+/** Settings only the broadcaster can change, stored in Twitch's extension configuration service. */
+export interface BroadcasterConfig { theme?: string; corner?: "br" | "bl"; size?: "small" | "medium" | "large"; ebsUrl?: string }
+
+export function readBroadcasterConfig(): BroadcasterConfig {
+  try { return JSON.parse(window.Twitch?.ext.configuration.broadcaster?.content ?? "{}") as BroadcasterConfig; } catch { return {}; }
+}
+
+/** Resolves once Twitch has delivered the configuration (or after a short timeout). */
+export function waitForBroadcasterConfig(timeoutMs = 2500): Promise<BroadcasterConfig> {
+  const ext = window.Twitch?.ext;
+  if (!ext) return Promise.resolve({});
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(readBroadcasterConfig()); } };
+    ext.configuration.onChanged(finish);
+    setTimeout(finish, timeoutMs);
+  });
+}
 declare global { interface Window { Twitch?: { ext: TwitchExt } } }
 
 /**
@@ -40,10 +59,7 @@ export class TwitchExtensionFeed implements CityFeed {
   start(onTick: (tick: CityTick) => void, onStatus: (status: string) => void) {
     const ext = window.Twitch!.ext;
     let snapshotLoaded = false;
-    const ebs = () => {
-      if (this.ebsUrl) return this.ebsUrl;
-      try { return JSON.parse(ext.configuration.broadcaster?.content ?? "{}").ebsUrl as string | undefined; } catch { return undefined; }
-    };
+    const ebs = () => this.ebsUrl ?? readBroadcasterConfig().ebsUrl;
     ext.onAuthorized(async auth => {
       onStatus("LIVE ON TWITCH");
       const base = ebs();

@@ -45,7 +45,7 @@ html.in-player .banner { bottom: calc(96px + min(34vw, 60vh) + 8px); }
 .live-dot { width: 10px; height: 10px; background: var(--plus); box-shadow: 0 0 0 2px var(--ink); animation: blink 1.2s steps(2) infinite; }
 .debug-stage { margin-top: 10px; color: var(--muted); font-size: 12px; letter-spacing: .04em; }
 .theme-picker { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; font-family: var(--chunky); font-size: 9px; color: var(--muted); }
-.theme-picker select { font: 14px var(--pixel); color: var(--text); background: var(--panel-hi); border: 0; padding: 5px 8px; box-shadow: 0 0 0 3px var(--ink); cursor: pointer; }
+.theme-picker .pixel-select { flex: 1; max-width: 236px; }
 .debug-rate { padding: 10px 0 8px; font-family: var(--chunky); font-size: 11px; color: var(--gold); }
 .debug-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 12px; color: var(--muted); }
 .debug-counts span { display: flex; justify-content: space-between; }

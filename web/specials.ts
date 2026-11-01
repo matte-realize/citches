@@ -15,7 +15,16 @@ export type SpecialStyle =
   | "well" | "stall" | "totem"
   | "windmill" | "smithy" | "fountain" | "watchtower"
   | "factory" | "waterTower" | "gasStation" | "arcade"
-  | "radioTower" | "turbines" | "dataCenter" | "stadium" | "solarFarm";
+  | "radioTower" | "turbines" | "dataCenter" | "stadium" | "solarFarm"
+  // Theme-specific stand-ins
+  | "obelisk" | "shrine" | "runestone" | "torii" | "granary" | "aqueduct" | "waterwheel" | "oasis" | "koiPond";
+
+/** Swap generic buildings for ones that belong to each civilization. */
+const THEMED: Partial<Record<SpecialStyle, Partial<Record<CityThemeId, SpecialStyle>>>> = {
+  totem: { egypt: "obelisk", rome: "shrine", norse: "runestone", japan: "torii" },
+  windmill: { egypt: "granary", rome: "aqueduct", japan: "waterwheel" },
+  fountain: { egypt: "oasis", japan: "koiPond" }
+};
 
 export const SPECIALS_BY_ERA: SpecialStyle[][] = [
   ["well", "stall", "totem"],
@@ -52,7 +61,8 @@ export class SpecialKit {
     return style;
   }
 
-  build(building: Group, era: number, style = this.choose(era)): Animated[] {
+  build(building: Group, era: number, chosen = this.choose(era)): Animated[] {
+    const style = THEMED[chosen]?.[this.themeId] ?? chosen;
     const animated: Animated[] = [];
     const batch = new Batcher();
     (this[style] as (b: Group, a: Animated[], batch: Batcher, era: number) => void).call(this, building, animated, batch, era);
@@ -323,7 +333,13 @@ export class SpecialKit {
 
   private stadium(b: Group, a: Animated[]) {
     block(b, 0.98, 0.02, 0.98, 0, 0.01, 0, sharedMat(0x5f6458, 1), 0, false);
-    const shell = place(b, cylinderGeo(0.48, 0.44, 0.26, 20), sharedMat(this.theme.accent, 0.6), 0, 0.13, 0);
+    const colosseum = this.themeId === "rome";
+    const shell = place(b, cylinderGeo(0.48, 0.44, colosseum ? 0.34 : 0.26, 20), sharedMat(colosseum ? 0xd1c2a0 : this.theme.accent, 0.7), 0, colosseum ? 0.17 : 0.13, 0);
+    if (colosseum) for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      block(b, 0.05, 0.09, 0.012, Math.sin(angle) * 0.485, 0.14, Math.cos(angle) * 0.4, sharedMat(0x5a4a3a, 0.9), angle, false);
+      block(b, 0.05, 0.07, 0.012, Math.sin(angle) * 0.485, 0.26, Math.cos(angle) * 0.4, sharedMat(0x5a4a3a, 0.9), angle, false);
+    }
     shell.scale.set(1, 1, 0.82);
     const pitch = place(b, cylinderGeo(0.36, 0.36, 0.02, 20), sharedMat(0x4fa04a, 0.9), 0, 0.27, 0);
     pitch.scale.set(1, 1, 0.78);
@@ -334,6 +350,134 @@ export class SpecialKit {
       a.push({ kind: "blink", object: lamp, period: 3 + this.random() * 2, offset: this.random() });
     }
     for (let i = 0; i < 3; i++) { const ball = this.keep(place(b, sphereGeo(0.02, 5, 4), sharedMat(0xf4f2ea, 0.6), -0.1 + i * 0.1, 0.3, 0, false)); a.push({ kind: "sway", object: ball, speed: 2 + i, amount: 0.6 }); }
+  }
+
+  // ---------- theme stand-ins ----------
+  private obelisk(b: Group, a: Animated[]) {
+    block(b, 0.96, 0.03, 0.96, 0, 0.015, 0, sharedMat(0xc9b27d, 0.9), 0, false);
+    block(b, 0.4, 0.1, 0.4, 0, 0.08, 0, this.stone());
+    const shaft = place(b, cylinderGeo(0.07, 0.11, 1.3, 4), sharedMat(0xd8c08b, 0.8), 0, 0.78, 0);
+    shaft.rotation.y = Math.PI / 4;
+    const tip = this.keep(place(b, coneGeo(0.08, 0.16, 4), sharedMat(0xffd35a, 0.3, { metalness: 0.7, emissive: 0x8a6a1a, emissiveIntensity: 0.6 }), 0, 1.51, 0));
+    tip.rotation.y = Math.PI / 4;
+    a.push({ kind: "blink", object: tip, period: 4, offset: 0 });
+    for (let i = 0; i < 4; i++) block(b, 0.05, 0.02, 0.012, 0, 0.5 + i * 0.22, 0.085 - i * 0.008, sharedMat(this.theme.accent, 0.8), 0, false);
+    for (const x of [-0.34, 0.34]) { const sphinx = place(b, sphereGeo(0.07, 6, 4), sharedMat(0xc9a86a, 0.9), x, 0.06, 0.3); sphinx.scale.set(0.8, 0.7, 1.4); }
+  }
+
+  private shrine(b: Group, a: Animated[]) {
+    block(b, 0.96, 0.03, 0.96, 0, 0.015, 0, this.stone(), 0, false);
+    block(b, 0.5, 0.08, 0.4, 0, 0.07, -0.1, this.stone());
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) place(b, cylinderGeo(0.025, 0.03, 0.34, 8), sharedMat(0xe0d3b5, 0.7), sx * 0.18, 0.28, -0.1 + sz * 0.13);
+    const roof = place(b, prismGeo(), sharedMat(0xb05b42, 0.85), 0, 0.45, -0.1);
+    roof.scale.set(0.5, 0.14, 0.4);
+    roof.rotation.y = Math.PI / 2;
+    block(b, 0.1, 0.12, 0.1, 0, 0.17, -0.1, sharedMat(0xd8c59e, 0.7));
+    const flame = this.keep(place(b, coneGeo(0.03, 0.08, 6), this.glow(0xff9a3a, 2), 0, 0.27, -0.1, false));
+    a.push({ kind: "blink", object: flame, period: 0.4, offset: 0 });
+    for (const x of [-0.3, 0.3]) { place(b, cylinderGeo(0.05, 0.06, 0.08, 8), sharedMat(0x9a5a3a, 0.9), x, 0.04, 0.3); place(b, sphereGeo(0.05, 6, 4), sharedMat(this.pick(this.theme.foliage), 1), x, 0.11, 0.3); }
+  }
+
+  private runestone(b: Group, a: Animated[]) {
+    block(b, 0.96, 0.012, 0.96, 0, 0.006, 0, sharedMat(0x5c7348, 1), 0, false);
+    const stone = block(b, 0.2, 0.6, 0.08, 0, 0.3, 0, sharedMat(0x8a877c, 1));
+    stone.rotation.z = 0.04;
+    for (let i = 0; i < 5; i++) {
+      const rune = this.keep(block(b, 0.1 - (i % 2) * 0.04, 0.02, 0.01, 0, 0.14 + i * 0.1, 0.045, this.glow(0x7fd8ff, 1.2), 0, false));
+      a.push({ kind: "blink", object: rune, period: 3, offset: i * 0.12 });
+    }
+    for (let i = 0; i < 7; i++) {
+      const angle = (i / 7) * Math.PI * 2;
+      place(b, sphereGeo(0.06, 5, 4), sharedMat(0x7a776c, 1), Math.sin(angle) * 0.36, 0.03, Math.cos(angle) * 0.36).scale.set(1, 0.6, 1);
+    }
+  }
+
+  private torii(b: Group, a: Animated[]) {
+    block(b, 0.96, 0.012, 0.96, 0, 0.006, 0, sharedMat(0x6f8a5a, 1), 0, false);
+    block(b, 0.16, 0.012, 0.9, 0, 0.012, 0, sharedMat(0xb5a88d, 0.9), 0, false);
+    const red = sharedMat(0xc0392b, 0.7);
+    for (const x of [-0.28, 0.28]) place(b, cylinderGeo(0.035, 0.04, 0.7, 8), red, x, 0.35, 0);
+    const top = block(b, 0.84, 0.05, 0.08, 0, 0.72, 0, sharedMat(0x1d1f24, 0.8));
+    top.scale.y = 0.05;
+    block(b, 0.84, 0.04, 0.09, 0, 0.71, 0, sharedMat(0x1d1f24, 0.8));
+    block(b, 0.7, 0.04, 0.06, 0, 0.6, 0, red);
+    block(b, 0.06, 0.1, 0.03, 0, 0.66, 0.03, sharedMat(0xe8d9a8, 0.8));
+    for (const x of [-0.3, 0.3]) {
+      block(b, 0.08, 0.12, 0.08, x, 0.06, 0.32, this.stone());
+      const light = this.keep(block(b, 0.1, 0.06, 0.1, x, 0.15, 0.32, this.glow(this.theme.glow, 1.2), 0, false));
+      a.push({ kind: "blink", object: light, period: 2.5, offset: this.random() });
+    }
+  }
+
+  private granary(b: Group) {
+    block(b, 0.96, 0.03, 0.96, 0, 0.015, 0, sharedMat(0xc9b27d, 0.9), 0, false);
+    for (const [x, z, s] of [[-0.22, -0.18, 1], [0.22, -0.18, 0.85], [0, 0.2, 0.9]] as const) {
+      place(b, cylinderGeo(0.15 * s, 0.17 * s, 0.32 * s, 10), this.wall(), x, 0.16 * s, z);
+      place(b, sphereGeo(0.15 * s, 10, 6), this.wall(), x, 0.32 * s, z).scale.set(1, 1.3, 1);
+      block(b, 0.06, 0.08, 0.02, x, 0.1 * s, z + 0.16 * s, sharedMat(0x4a3628, 1));
+    }
+    for (let i = 0; i < 3; i++) place(b, sphereGeo(0.04, 6, 4), sharedMat(0xd8be73, 1), 0.34, 0.03, 0.2 + i * 0.07);
+  }
+
+  private aqueduct(b: Group) {
+    block(b, 0.96, 0.012, 0.96, 0, 0.006, 0, sharedMat(0x8b8a62, 1), 0, false);
+    const stone = sharedMat(0xd1c2a0, 0.8);
+    for (const x of [-0.36, 0, 0.36]) block(b, 0.1, 0.62, 0.16, x, 0.31, 0, stone);
+    for (const x of [-0.18, 0.18]) {
+      const arch = place(b, cylinderGeo(0.13, 0.13, 0.16, 12, ), stone, x, 0.5, 0);
+      arch.rotation.x = Math.PI / 2;
+      block(b, 0.26, 0.2, 0.16, x, 0.66, 0, stone);
+    }
+    block(b, 0.94, 0.08, 0.2, 0, 0.8, 0, stone);
+    block(b, 0.9, 0.02, 0.1, 0, 0.845, 0, sharedMat(0x4aa8d0, 0.1, { emissive: 0x1d6f9a, emissiveIntensity: 0.6 }), 0, false);
+  }
+
+  private waterwheel(b: Group, a: Animated[]) {
+    block(b, 0.96, 0.012, 0.96, 0, 0.006, 0, sharedMat(0x6f8a5a, 1), 0, false);
+    block(b, 0.96, 0.02, 0.22, 0, 0.012, 0.32, sharedMat(0x4aa8d0, 0.1, { emissive: 0x1d6f9a, emissiveIntensity: 0.5 }), 0, false);
+    block(b, 0.56, 0.34, 0.46, -0.12, 0.17, -0.14, this.wall());
+    this.hipRoof(b, 0.68, 0.58, 0.34, 0.24, -0.12, -0.14);
+    const wheel = this.keep(new Group());
+    wheel.position.set(0.3, 0.24, 0.14);
+    place(wheel, cylinderGeo(0.22, 0.22, 0.05, 12), sharedMat(0x5a3f2a, 1), 0, 0, 0).rotation.z = Math.PI / 2;
+    for (let i = 0; i < 8; i++) { const paddle = block(wheel, 0.07, 0.06, 0.012, 0, 0, 0, sharedMat(0x7a5a3a, 1)); paddle.rotation.x = (i / 8) * Math.PI * 2; paddle.position.set(0, Math.cos((i / 8) * Math.PI * 2) * 0.22, Math.sin((i / 8) * Math.PI * 2) * 0.22); }
+    b.add(wheel);
+    a.push({ kind: "spin", object: wheel, axis: "x", speed: 1.1 });
+  }
+
+  private oasis(b: Group) {
+    block(b, 0.96, 0.03, 0.96, 0, 0.015, 0, sharedMat(0xd3b57a, 0.9), 0, false);
+    place(b, cylinderGeo(0.34, 0.36, 0.02, 14), sharedMat(0x3fa6b8, 0.1, { emissive: 0x1d6f8a, emissiveIntensity: 0.55 }), 0, 0.035, 0).scale.set(1, 1, 0.75);
+    for (const [x, z] of [[-0.34, -0.3], [0.36, -0.2], [0.3, 0.32]] as const) {
+      for (let i = 0; i < 5; i++) place(b, cylinderGeo(0.016, 0.02, 0.1, 5), sharedMat(0x8a6a45, 1), x + i * 0.008, 0.05 + i * 0.095, z);
+      for (let i = 0; i < 6; i++) { const leaf = block(b, 0.03, 0.012, 0.2, x + 0.04 + Math.sin(i) * 0.06, 0.5, z + Math.cos(i) * 0.06, sharedMat(0x5c8f4e, 1), i * Math.PI / 3); leaf.rotation.x = 0.4; }
+    }
+    for (let i = 0; i < 5; i++) place(b, sphereGeo(0.035, 5, 4), sharedMat(0x6b8f3e, 1), -0.2 + i * 0.1, 0.04, 0.3);
+  }
+
+  private koiPond(b: Group, a: Animated[]) {
+    block(b, 0.96, 0.012, 0.96, 0, 0.006, 0, sharedMat(0x6f8a5a, 1), 0, false);
+    place(b, cylinderGeo(0.36, 0.38, 0.03, 14), sharedMat(0x3f7f95, 0.1, { emissive: 0x16485a, emissiveIntensity: 0.5 }), 0, 0.02, 0).scale.set(1, 1, 0.8);
+    const bridge = block(b, 0.1, 0.03, 0.62, 0, 0.09, 0, sharedMat(0xc0392b, 0.7));
+    bridge.rotation.x = 0.0;
+    for (const z of [-0.26, 0.26]) block(b, 0.1, 0.06, 0.06, 0, 0.04, z, sharedMat(0xc0392b, 0.7));
+    for (let i = 0; i < 3; i++) {
+      const fish = this.keep(new Group());
+      fish.position.set(0, 0.04, 0);
+      block(fish, 0.06, 0.012, 0.025, 0.2 + i * 0.03, 0, 0, sharedMat(i % 2 ? 0xf08a4b : 0xf5f0e6, 0.6));
+      b.add(fish);
+      a.push({ kind: "spin", object: fish, axis: "y", speed: 0.6 + i * 0.25 });
+    }
+    block(b, 0.08, 0.14, 0.08, 0.36, 0.07, 0.34, this.stone());
+    const lamp = this.keep(block(b, 0.11, 0.06, 0.11, 0.36, 0.17, 0.34, this.glow(this.theme.glow, 1), 0, false));
+    a.push({ kind: "blink", object: lamp, period: 3, offset: 0.2 });
+    place(b, sphereGeo(0.1, 7, 5), sharedMat(0xc0503e, 1), -0.36, 0.22, -0.3);
+    place(b, cylinderGeo(0.02, 0.025, 0.2, 5), sharedMat(0x6d4c35, 1), -0.36, 0.1, -0.3);
+  }
+
+  private hipRoof(parent: Group, w: number, d: number, y: number, rise: number, x: number, z: number) {
+    const roof = place(parent, pyramidGeo(), this.roof(), x, y, z);
+    roof.scale.set(w, rise, d);
   }
 
   private solarFarm(b: Group, _a: Animated[], batch: Batcher) {

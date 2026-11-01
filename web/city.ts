@@ -6,6 +6,7 @@ import type { ColorRepresentation, Material, MeshStandardMaterialParameters } fr
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
 import { HomeKit } from "./homes.js";
+import { buildModernLandmark } from "./landmarks.js";
 import { SpecialKit } from "./specials.js";
 import type { Animated } from "./specials.js";
 import { bakeStatic, disposeObject } from "./kit.js";
@@ -676,7 +677,7 @@ export class ChatCity {
   private makeHouse(tile: Tile, immediate = false): boolean {
     const building = new Group();
     const era = this.eraIndex;
-    if (era >= 2 && this.random() < 0.8) {
+    if (era >= 2) {
       this.homes.build(building, era);
       if (!this.connectNewBuilding(tile, building)) return false;
       tile.group.add(building);
@@ -694,99 +695,7 @@ export class ChatCity {
       this.animateBuild(building, tile, immediate);
       return true;
     }
-    const width = 0.72 + this.random() * 0.2;
-    const depth = 0.72 + this.random() * 0.2;
-    const variant = Math.floor(this.random() * 4);
-    const floors = era === 2 ? (variant === 3 ? 4 : 2)
-      : era === 3 ? (variant === 3 ? 6 : 3)
-      : era === 4 ? (variant === 3 ? 7 : variant === 2 ? 5 : 3)
-      : Math.floor(4 + this.random() * 5);
-    const floorHeight = era < 4 ? 0.6 : 0.68;
-    const height = 0.28 + floors * floorHeight;
-    const wall = mat(this.color(this.theme.house), era >= 4 ? 0.45 : 0.82, era >= 4 ? { metalness: 0.18 } : {});
-    this.box(building, width + 0.12, 0.13, depth + 0.12, this.theme.stone, 0, 0.14, 0);
-    this.box(building, width, height, depth, 0, 0, height / 2 + 0.16, 0, wall);
-
-    // Small attached wings, balconies, porches, and roof rooms break up the repeated box silhouette.
-    if (variant === 0) {
-      const porchDepth = 0.2;
-      this.box(building, width * 0.76, 0.075, porchDepth, this.theme.stone, 0, 0.19, depth / 2 + porchDepth / 2 - 0.015);
-      for (const x of [-width * 0.29, width * 0.29]) {
-        this.box(building, 0.045, 0.5, 0.045, this.theme.accent, x, 0.46, depth / 2 + porchDepth * 0.72, mat(this.theme.stone, 0.8));
-      }
-      const canopy = this.box(building, width * 0.9, 0.075, porchDepth * 1.16, this.theme.roof[0], 0, 0.75, depth / 2 + porchDepth * 0.58);
-      canopy.rotation.x = this.themeId === "japan" ? -0.06 : 0;
-    } else if (variant === 1) {
-      const wingWidth = width * 0.34;
-      const wingHeight = height * 0.7;
-      const wing = this.box(building, wingWidth, wingHeight, depth * 0.72, this.color(this.theme.house), -width * 0.57, wingHeight / 2 + 0.16, -depth * 0.04, mat(this.color(this.theme.house), 0.86));
-      wing.castShadow = true;
-      this.box(building, wingWidth + 0.06, 0.08, depth * 0.78, this.theme.roof[0], -width * 0.57, wingHeight + 0.2, -depth * 0.04);
-      this.box(building, 0.13, 0.31, 0.035, 0, -width * 0.57, 0.33, depth * 0.33, mat(0x624737, 0.95));
-    } else if (variant === 2 && floors > 2) {
-      const balconyY = floorHeight + 0.2;
-      this.box(building, width * 0.82, 0.07, 0.19, this.theme.stone, 0, balconyY, depth / 2 + 0.075);
-      for (const x of [-width * 0.36, -width * 0.12, width * 0.12, width * 0.36]) {
-        this.box(building, 0.035, 0.22, 0.035, this.theme.accent, x, balconyY + 0.14, depth / 2 + 0.15, mat(this.theme.stone, 0.78));
-      }
-      this.box(building, width * 0.86, 0.045, 0.045, this.theme.stone, 0, balconyY + 0.26, depth / 2 + 0.15);
-    } else if (variant === 3) {
-      const roofRoom = this.box(building, width * 0.48, 0.38, depth * 0.5, this.theme.roof[1], width * 0.18, height + 0.37, -depth * 0.12, mat(this.color(this.theme.house), 0.8));
-      roofRoom.castShadow = true;
-      this.box(building, width * 0.58, 0.1, depth * 0.62, this.theme.roof[0], width * 0.18, height + 0.61, -depth * 0.12);
-    }
-    const windowRows = Math.max(1, floors - (era < 3 ? 0 : 1));
-    this.addWindows(building, width, depth, height, windowRows, era >= 3 ? 3 : 2);
-    this.box(building, 0.19, 0.38, 0.045, 0x624737, 0, 0.35, depth / 2 + 0.026);
-
-    if (era < 4 && variant !== 1) {
-      const roofColor = this.color(this.theme.roof);
-      if (variant === 0) {
-        const pitch = this.themeId === "norse" ? 0.68 : this.themeId === "japan" ? 0.38 : 0.52;
-        for (const side of [-1, 1]) {
-          const slope = this.box(building, width * 0.76, 0.11, depth * (this.themeId === "japan" ? 1.22 : 1.04), roofColor, side * width * 0.2, height + 0.35, 0);
-          slope.rotation.z = side * pitch;
-        }
-        this.box(building, 0.08, 0.1, depth * 1.06, roofColor, 0, height + 0.65, 0);
-      } else if (variant === 2) {
-        const roofHeight = 0.5;
-        const roof = new Mesh(new ConeGeometry(Math.max(width, depth) * 0.76, roofHeight, this.themeId === "japan" ? 5 : 4), mat(roofColor));
-        roof.rotation.y = Math.PI / 4;
-        roof.position.y = height + 0.16 + roofHeight / 2;
-        roof.castShadow = true;
-        building.add(roof);
-      } else {
-        const parapet = mat(this.theme.stone, 0.82);
-        for (const [x, z, w, d] of [[0, depth / 2, width + 0.05, 0.08], [0, -depth / 2, width + 0.05, 0.08], [width / 2, 0, 0.08, depth], [-width / 2, 0, 0.08, depth]] as const) {
-          this.box(building, w, 0.18, d, this.theme.stone, x, height + 0.24, z, parapet);
-        }
-        if (this.themeId === "egypt") {
-          for (const x of [-width * 0.38, 0, width * 0.38]) this.box(building, 0.09, 0.12, 0.09, this.theme.accent, x, height + 0.39, depth / 2, mat(this.theme.accent, 0.7));
-        }
-      }
-    } else {
-      const capColor = this.themeId === "japan" ? 0x45434a : this.themeId === "egypt" ? 0xa88b5d : 0x384a4b;
-      this.box(building, width + 0.08, 0.1, depth + 0.08, capColor, 0, height + 0.22, 0);
-      if (floors >= 4) {
-        for (let floor = 1; floor < floors; floor++) {
-          const y = 0.16 + floor * floorHeight;
-          this.box(building, width * 0.82, 0.045, 0.13, this.theme.stone, 0, y, depth / 2 + 0.08);
-          this.box(building, width * 0.82, 0.035, 0.035, 0x303d41, 0, y + 0.08, depth / 2 + 0.14);
-        }
-      }
-      if (variant === 1 || variant === 3) {
-        const rooftop = new Mesh(new CylinderGeometry(0.12, 0.18, 0.2, 8), mat(this.color(this.theme.roof)));
-        rooftop.position.y = height + 0.32;
-        building.add(rooftop);
-      }
-    }
-    this.addThemeDetails(building, width, height, depth, era);
-    if (!this.connectNewBuilding(tile, building)) return false;
-    tile.group.add(building);
-    tile.building = building;
-    tile.kind = "house";
-    this.animateBuild(building, tile, immediate);
-    return true;
+    return false;
   }
 
   private makeAncientHut(building: Group, includeHearth = false) {
@@ -903,38 +812,12 @@ export class ChatCity {
     } else if (era === 2 || era === 3) {
       this.makeThemeLandmark(building, era, stone);
     } else {
-      const style = Math.floor(this.random() * 3);
-      if (style === 0) {
-        const baseH = 0.65;
-        this.box(building, 0.94, baseH, 0.94, 0, 0, baseH / 2 + 0.08, 0, stone);
-        this.addWindows(building, 0.94, 0.94, baseH, 2, 3);
-        this.box(building, 0.58, 3.05, 0.58, 0, 0, 0.08 + baseH + 1.525, 0, mat(0x829a9f, 0.4, { metalness: 0.2 }));
-        this.addWindows(building, 0.58, 0.58, 3.05, 9, 2);
-        this.box(building, 0.74, 0.12, 0.74, 0x6a7d7d, 0, 0.08 + baseH + 3.05, 0);
-        const spire = new Mesh(new ConeGeometry(0.16, 0.9, 8), mat(this.theme.accent, 0.38, { metalness: 0.4 }));
-        spire.position.y = 0.08 + baseH + 3.05 + 0.5; spire.castShadow = true; building.add(spire);
-      } else if (style === 1) {
-        this.box(building, 0.96, 0.72, 0.96, 0, 0, 0.44, 0, stone);
-        this.addWindows(building, 0.96, 0.96, 0.72, 2, 3);
-        const dome = new Mesh(new SphereGeometry(0.39, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(this.theme.accent, 0.45, { metalness: 0.25 }));
-        dome.position.y = 0.84; dome.castShadow = true; building.add(dome);
-        const cap = new Mesh(new ConeGeometry(0.07, 0.35, 8), mat(0xd6b270, 0.42, { metalness: 0.3 }));
-        cap.position.y = 1.25; building.add(cap);
-      } else {
-        const towerH = 4.1;
-        this.box(building, 0.64, towerH, 0.64, 0, 0, towerH / 2 + 0.08, 0, mat(0x9da6ac, 0.42, { metalness: 0.22 }));
-        this.addWindows(building, 0.64, 0.64, towerH, 12, 2);
-        this.box(building, 0.8, 0.12, 0.8, 0x78878a, 0, towerH + 0.14, 0);
-        const antenna = new Mesh(new CylinderGeometry(0.025, 0.06, 0.9, 6), mat(this.theme.accent, 0.45, { metalness: 0.35 }));
-        antenna.position.y = towerH + 0.63; building.add(antenna);
-        const beacon = new Mesh(new SphereGeometry(0.065, 8, 6), mat(this.theme.glow, 0.2, { emissive: this.theme.glow, emissiveIntensity: 1.4 }));
-        beacon.position.y = towerH + 1.08; building.add(beacon);
-      }
+      buildModernLandmark(building, this.themeId, this.theme, () => this.random(), false);
     }
-    if (era > 1) {
+    if (era === 2 || era === 3) {
       this.box(building, 0.2, 0.4, 0.055, 0, 0, 0.23, 0.48, mat(0x513925, 1));
     }
-    if (era > 1) {
+    if (era === 2 || era === 3) {
       // Fit the trim to the landmark's real height so nothing floats above short buildings.
       const top = new Box3().setFromObject(building).max.y;
       this.addThemeDetails(building, 0.75, Math.max(0.4, top - 0.24), 0.75, era);
@@ -1043,19 +926,7 @@ export class ChatCity {
 
   private makeSkyscraper(tile: Tile, immediate = false): boolean {
     const building = new Group();
-    const glass = mat(this.theme.house[1], 0.32, { metalness: 0.22 });
-    this.box(building, 0.98, 0.28, 0.98, 0x77766a, 0, 0.18, 0);
-    this.box(building, 0.58, 5.2, 0.58, 0, 0, 2.92, 0, glass);
-    this.addWindows(building, 0.58, 0.58, 5.2, 15, 2);
-    for (const x of [-0.34, 0.34]) {
-      this.box(building, 0.045, 5.25, 0.045, 0x505d61, x, 2.9, 0, mat(0x505d61, 0.5, { metalness: 0.36 }));
-    }
-    this.box(building, 0.72, 0.16, 0.72, 0x626d70, 0, 5.6, 0);
-    const antenna = new Mesh(new CylinderGeometry(0.025, 0.05, 0.75, 6), mat(this.theme.accent, 0.4, { metalness: 0.3 }));
-    antenna.position.y = 6.04; building.add(antenna);
-    const entrance = this.box(building, 0.22, 0.42, 0.06, 0, 0, 0.23, 0.5, mat(0x29343a, 0.35, { metalness: 0.2 }));
-    entrance.material.emissive.setHex(this.theme.glow);
-    entrance.material.emissiveIntensity = 0.16;
+    buildModernLandmark(building, this.themeId, this.theme, () => this.random(), true);
     if (!this.connectNewBuilding(tile, building)) return false;
     tile.group.add(building);
     tile.building = building;

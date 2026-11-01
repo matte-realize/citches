@@ -1,0 +1,15 @@
+body.config-page { margin: 0; min-height: 100vh; background: #1b2433; color: #f4ecd8; font-family: "Pixelify Sans", ui-monospace, monospace; -webkit-font-smoothing: none; }
+.config { max-width: 460px; padding: 24px 20px 40px; }
+.config h1 { margin: 0 0 8px; font: 16px "Press Start 2P", monospace; color: #ffd35a; text-shadow: 2px 2px 0 #b7791f, 4px 4px 0 #10141c; }
+.config .lead { margin: 0 0 20px; color: #a9b7c6; font-size: 15px; line-height: 1.4; }
+.config .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-size: 15px; }
+.config .field small { color: #a9b7c6; font-size: 12px; }
+.config .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.config input { font: 14px "Pixelify Sans", monospace; color: #f4ecd8; background: #2a3850; border: 0; padding: 8px; box-shadow: 0 0 0 3px #10141c, inset 0 3px 0 #1b2433; }
+.config input:focus-visible { outline: 3px solid #ffd35a; outline-offset: 3px; }
+.config .save { margin-top: 6px; padding: 12px 22px; font: 11px "Press Start 2P", monospace; color: #10141c; background: #7cf29a; border: 0; cursor: pointer; box-shadow: 0 0 0 3px #10141c, inset 0 -4px 0 #1f8a49; transition: transform .12s cubic-bezier(.3, 2, .5, 1); }
+.config .save:hover { transform: translateY(-2px); }
+.config .save:active { transform: translateY(2px); }
+.config .status { min-height: 20px; margin-top: 14px; font-size: 14px; }
+.config .status.ok { color: #7cf29a; }
+.config .status.error { color: #ff6b6b; }
