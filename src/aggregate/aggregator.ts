@@ -19,17 +19,17 @@ export interface GrowthSignals {
   /** Best purely positive message this tick, if any. */
   highlight?: { user: string; text: string; points: number };
   /** Chat commands typed this tick ("!plant" and friends). */
-  commands: Array<{ user: string; command: ChatCommand; color?: string }>;
+  commands: Array<{ user: string; command: ChatCommand; color?: string; amount?: number }>;
   /** Latest known name colour per chatter. */
   colors: Record<string, string>;
 }
 
-const COMMAND = /^!(plant|repair|cheer|home)\b/i;
+const COMMAND = /^!(plant|repair|cheer|home|donate)\b\s*(\d+)?/i;
 export class Aggregator {
   private messages: Array<{ message: ChatMessage; receivedAt: number; category: Category; signal: ReturnType<typeof analyzeMessage> }> = [];
   private pending: Array<{ message: ChatMessage; category: Category; signal: ReturnType<typeof analyzeMessage>; hits: ScoreHit[] }> = [];
   private scoreContext = new ScoreContext();
-  private pendingCommands: Array<{ user: string; command: ChatCommand; color?: string }> = [];
+  private pendingCommands: Array<{ user: string; command: ChatCommand; color?: string; amount?: number }> = [];
   private timer?: ReturnType<typeof setInterval>;
   constructor(
     private tick: (aggregate: Aggregate, deltaCounts: Counts, deltaRaidViewers: number, growthSignals: GrowthSignals) => void,
@@ -40,7 +40,7 @@ export class Aggregator {
   add(message: ChatMessage, receivedAt = Date.now()) {
     // Commands act on the city but are not scored, so they cannot be farmed for points.
     const command = COMMAND.exec(message.text.trim());
-    if (command) { this.pendingCommands.push({ user: message.user, command: command[1].toLowerCase() as ChatCommand, color: message.color }); return; }
+    if (command) { this.pendingCommands.push({ user: message.user, command: command[1].toLowerCase() as ChatCommand, color: message.color, amount: command[2] ? Number(command[2]) : undefined }); return; }
     const category = classify(message);
     const signal = analyzeMessage(message, category);
     this.messages.push({ message, receivedAt, category, signal });

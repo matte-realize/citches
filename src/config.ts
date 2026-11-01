@@ -85,6 +85,23 @@ export const config = {
     home: { enabled: true, cost: 0, cooldownMs: 30_000 },
     maxPerTick: 3
   },
+  /**
+   * The community capitol in the central plaza. A share of every plus point funds it, chatters can
+   * `!donate` their own points (worth double), and each stage also needs a minimum era.
+   */
+  capitol: {
+    share: 0.15,
+    donationMultiplier: 2,
+    donate: { enabled: true, defaultAmount: 10, minAmount: 3, cooldownMs: 20_000 },
+    // Cumulative fund needed for each stage, and the era each stage needs.
+    stages: [
+      { points: 40, era: 0 },   // 1 Gathering Circle
+      { points: 160, era: 1 },  // 2 Town Hall
+      { points: 420, era: 2 },  // 3 Great Hall
+      { points: 900, era: 3 },  // 4 Capitol
+      { points: 1700, era: 4 }  // 5 Grand Capitol
+    ]
+  },
   /** Owned homes grow when their owner comes back after a break or keeps contributing. */
   homes: { returnGapMs: 10 * 60_000, upgradePoints: 30, maxLevel: 3 },
   /** What `npm run calibrate` checks the danger system against, using real chat logs. */

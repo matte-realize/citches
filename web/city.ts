@@ -7,6 +7,8 @@ import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
 import { HomeKit } from "./homes.js";
 import { buildModernLandmark } from "./landmarks.js";
+import { CAPITOL_NAMES, buildCapitol, capitolStyleFor } from "./capitol.js";
+import type { CapitolDonor } from "../src/types.js";
 import { SpecialKit } from "./specials.js";
 import type { Animated } from "./specials.js";
 import { bakeStatic, disposeObject, grimeMaterial, scaleSharedGlow } from "./kit.js";
@@ -943,9 +945,46 @@ export class ChatCity {
     return tile.group.position.clone();
   }
 
+  // ---------- the community capitol ----------
+  private capitolGroup?: Group;
+  private capitolStage = 0;
+
+  /** Theme name for a capitol stage, e.g. "Capitolium" or "Imperial Castle". */
+  capitolName(stage = this.capitolStage) { return CAPITOL_NAMES[capitolStyleFor(this.themeId)][Math.max(0, Math.min(5, stage))]; }
+
+  private setCapitol(stage: number, donors: CapitolDonor[], historical: boolean) {
+    const center = this.hearthTile;
+    if (!center || stage <= this.capitolStage && this.capitolGroup) return;
+    this.capitolStage = stage;
+    if (this.capitolGroup) { this.root.remove(this.capitolGroup); disposeObject(this.capitolGroup); }
+    const { group, animated } = buildCapitol(stage, capitolStyleFor(this.themeId), this.theme, () => this.random(), donors);
+    group.position.copy(center.group.position).setY(0);
+    this.root.add(group);
+    this.capitolGroup = group;
+    for (const part of animated) this.animated.push({ tile: center, building: group, part });
+    this.shadowsDirty = true;
+    if (historical) return;
+    // Rise in chunky steps like any build, with a wide dust ring and a city-wide party.
+    let t = 0;
+    group.scale.y = 0.05;
+    this.effects.push(delta => {
+      t += delta / 1.6;
+      group.scale.y = Math.max(0.05, Math.ceil(Math.min(1, t) * 8) / 8);
+      this.shadowsDirty = true;
+      return t >= 1;
+    });
+    for (let i = 0; i < 28; i++) {
+      const angle = (i / 28) * Math.PI * 2;
+      this.puff(group.position.clone().add(new Vector3(Math.cos(angle) * 1.4, 0.06, Math.sin(angle) * 1.4)), 0xb8a888, 0.06, 1, new Vector3(Math.cos(angle) * 1.3, 0.5, Math.sin(angle) * 1.3), 1.2, true);
+    }
+    this.focus.copy(group.position);
+    this.celebrate();
+    this.onNotice?.({ kind: "capitol", user: "", at: group.position.clone().setY(1.2), level: stage });
+  }
+
   // ---------- the audience game: commands and owned homes ----------
   /** Lets the HUD show who did what: "@name planted a tree", name tags over homes, etc. */
-  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim"; user: string; at?: Vector3; level?: number; cost?: number; color?: string }) => void;
+  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim" | "donate" | "capitol"; user: string; at?: Vector3; level?: number; cost?: number; color?: string }) => void;
   private homesByOwner = new Map<string, Tile[]>();
 
   private ownerColor(owner: string, color?: string) {
@@ -1034,6 +1073,9 @@ export class ChatCity {
     } else if (event.command === "cheer" && !historical) {
       this.celebrate();
       this.onNotice?.({ kind: "cheer", user: event.user, at: this.focus.clone(), cost: event.cost });
+    } else if (event.command === "donate" && !historical && this.hearthTile) {
+      for (let i = 0; i < 10; i++) this.puff(this.hearthTile.group.position.clone().add(new Vector3((this.random() - 0.5) * 1.5, 0.8 + this.random() * 0.6, -0.9)), 0xffd35a, 0.035, 1, new Vector3(0, 0.9, 0), 0.4);
+      this.onNotice?.({ kind: "donate", user: event.user, at: this.hearthTile.group.position.clone().setY(1), cost: event.cost });
     } else if (event.command === "home" && !historical) {
       const homes = this.ownedHomes(event.user);
       if (!homes.length) { this.onNotice?.({ kind: "nohome", user: event.user }); return; }
@@ -1187,7 +1229,7 @@ export class ChatCity {
 
   private updateAnimated(delta: number) {
     const clock = this.actorClock;
-    this.animated = this.animated.filter(entry => entry.tile.building === entry.building);
+    this.animated = this.animated.filter(entry => entry.tile.building === entry.building || (entry.building === this.capitolGroup && entry.building !== undefined));
     for (const { building, part } of this.animated) {
       if (part.kind === "spin") part.object.rotation[part.axis] += part.speed * delta;
       else if (part.kind === "blink") part.object.visible = ((clock / part.period + part.offset) % 1) < 0.55;
@@ -1797,6 +1839,7 @@ export class ChatCity {
     if (event.type === "advancement") { this.unlockTechnology(event.era); if (!historical) this.celebrate(); }
     else if (event.type === "build") this.build(event.kind, event.count, historical, event.builders);
     else if (event.type === "command") this.runCommand(event, historical);
+    else if (event.type === "capitol") this.setCapitol(event.stage, event.donors, historical);
     else if (event.type === "homeUpgrade") this.upgradeHome(event.owner, event.level, event.color, historical);
     else if (event.type === "boom") this.boom(event.viewers, historical);
     else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs, event.kind);

@@ -28,6 +28,8 @@ export interface HudOptions {
   speakerPoint?: () => { x: number; y: number } | undefined;
   /** Name shown on the scoreboard, e.g. "XQC CITY". */
   cityName?: string;
+  /** Theme name of a capitol stage. */
+  capitolName?: (stage: number) => string;
   /** A random owned home, for rotating name tags. */
   featuredHome?: () => { owner: string; at: { x: number; y: number }; level: number } | undefined;
 }
@@ -49,6 +51,10 @@ export class CityHud {
   private leaders = el("div", "leaders-row");
   private upkeepLine = el("div", "upkeep-line");
   private hint = el("div", "command-hint");
+  private capitolRow = el("div", "meter-row capitol-row");
+  private capitolLabel = el("div", "capitol-label", "⌂ CAPITOL");
+  private capitolFill = el("div", "meter-fill capitol-fill");
+  private capitolValue = el("div", "meter-value capitol-value");
   private lastBubbleAt = 0;
   private sleepSign = el("div", "sleep-sign");
   private zTimer?: ReturnType<typeof setInterval>;
@@ -74,8 +80,13 @@ export class CityHud {
     dangerRow.append(el("div", "danger-label", "DANGER"), this.dangerMeter);
     this.recovery.hidden = true;
     this.leaders.hidden = true;
+    const capitolMeter = el("div", "meter capitol-meter");
+    capitolMeter.append(this.capitolFill);
+    this.capitolRow.append(this.capitolLabel, capitolMeter, this.capitolValue);
+    this.capitolRow.hidden = true;
+    dangerRow.after(this.capitolRow);
     this.upkeepLine.hidden = true;
-    this.hint.innerHTML = "TYPE <b>!plant</b> <b>!repair</b> <b>!cheer</b> <b>!home</b> · KIND CHAT EARNS POINTS";
+    this.hint.innerHTML = "SPEND POINTS: <b>!plant</b> <b>!repair</b> <b>!cheer</b> <b>!donate</b> <b>!home</b>";
     board.append(scoreRow, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery, this.hint);
     if (options.featuredHome) setInterval(() => {
       const home = options.featuredHome?.();
@@ -132,6 +143,16 @@ export class CityHud {
       }));
     }
     if (!replay && score.highlight) this.say(score.highlight.user, score.highlight.text);
+    if (score.capitol) {
+      const capitol = score.capitol;
+      const name = (stage: number) => this.options.capitolName?.(stage) ?? `STAGE ${stage}`;
+      const done = capitol.stage >= 5;
+      this.capitolRow.hidden = false;
+      this.capitolLabel.textContent = done ? `★ ${name(5)}` : `⌂ ${name(capitol.stage + 1)}`;
+      this.capitolFill.style.width = `${done ? 100 : Math.round(Math.min(1, capitol.current / capitol.goal) * 100)}%`;
+      this.capitolValue.textContent = done ? "DONE" : capitol.lockedUntilEra !== undefined && capitol.current >= capitol.goal ? `ERA ${capitol.lockedUntilEra + 1}` : `${Math.round(Math.min(capitol.current, capitol.goal))}/${capitol.goal}`;
+      this.capitolRow.classList.toggle("locked", capitol.lockedUntilEra !== undefined && capitol.current >= capitol.goal);
+    }
     const upkeep = score.upkeep ?? "steady";
     this.upkeepLine.hidden = upkeep === "steady" || document.body.classList.contains("city-asleep");
     this.upkeepLine.className = `upkeep-line ${upkeep}`;
@@ -189,9 +210,11 @@ export class CityHud {
       nohome: `${user} has no home yet. Chat kindly to build one!`,
       broke: `${user} needs ${extra.cost ?? "more"} pts`,
       fine: `${user}: the city is in good shape!`,
-      upgrade: `${user}'s home grew to level ${extra.level ?? 1}!`
+      upgrade: `${user}'s home grew to level ${extra.level ?? 1}!`,
+      donate: `${user} donated ${extra.cost ?? ""} to the capitol!`
     };
     if (kind === "home" && at) { this.nameTag(user, at, extra.level); return; }
+    if (kind === "capitol") { this.banner(`THE ${(this.options.capitolName?.(extra.level ?? 1) ?? "CAPITOL").toUpperCase()} IS COMPLETE!`, "era"); return; }
     const message = text[kind];
     if (!message) return;
     const node = el("div", `notice notice-${kind}`, message);

@@ -111,7 +111,7 @@ export class DemoFeed implements CityFeed {
     this.aggregator.start();
     const started = Date.now();
     const pick = <T>(list: T[]) => list[Math.floor(Math.random() * list.length)];
-    const send = (text: string, user = `viewer${Math.floor(Math.random() * 60)}`, extra: Partial<ChatMessage> = {}) =>
+    const send = (text: string, user = `viewer${Math.floor(Math.random() * 200)}`, extra: Partial<ChatMessage> = {}) =>
       this.aggregator?.add({ timestamp: Date.now(), user, text, emotes: [], isRaid: false, raidViewerCount: 0, ...extra });
     this.timers.push(setInterval(() => {
       // Every ~75 s a troll wave rolls through for ~16 s, enough to fill the danger meter.
@@ -128,7 +128,7 @@ export class DemoFeed implements CityFeed {
       }
       if (Math.random() < 0.012) send("", "supporter", { supportPoints: 2.5 });
       // Viewers play too: commands from regulars who have earned points.
-      if (Math.random() < 0.02) send(pick(["!plant", "!plant", "!cheer", "!home", "!repair"]), `viewer${Math.floor(Math.random() * 40)}`, { color: pick(["#ff7f50", "#1e90ff", "#9acd32", "#ff69b4", "#daa520"]) });
+      if (Math.random() < 0.02) send(pick(["!plant", "!plant", "!cheer", "!home", "!repair", "!donate", "!donate 15"]), `viewer${Math.floor(Math.random() * 40)}`, { color: pick(["#ff7f50", "#1e90ff", "#9acd32", "#ff69b4", "#daa520"]) });
       if (Math.random() < 0.003) send("", "raider", { isRaid: true, raidViewerCount: 60 + Math.floor(Math.random() * 200) });
     }, Math.max(40, 140 / this.speed)));
   }

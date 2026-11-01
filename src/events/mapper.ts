@@ -21,6 +21,7 @@ export interface MapperState {
   leaderboard?: Array<[string, number]>;
   outstandingWear?: number;
   spent?: Array<[string, number]>;
+  capitolFund?: number; capitolStage?: number; donors?: Array<[string, number]>;
   owners?: Array<[string, number, string]>;
 }
 
@@ -63,6 +64,9 @@ export class EventMapper {
   private commandReadyAt = new Map<string, number>();
   private owners = new Map<string, { level: number; lastSeen: number; earned: number; color?: string }>();
   private colors = new Map<string, string>();
+  private capitolFund = 0;
+  private capitolStage = 0;
+  private donors = new Map<string, number>();
 
   /** A chatter's spendable points. */
   balance(user: string) { return Math.floor((this.leaderboard.get(user) ?? 0) - (this.spent.get(user) ?? 0)); }
@@ -81,6 +85,8 @@ export class EventMapper {
       recoveryProgress: this.recoveryProgress, recoveryGoal: this.recoveryGoal,
       scoreTotal: this.scoreTotal, threat: this.threat, snapshot: { ...this.snapshot, highlight: undefined },
       outstandingWear: this.outstandingWear,
+      capitolFund: this.capitolFund, capitolStage: this.capitolStage,
+      donors: [...this.donors].sort((a, b) => b[1] - a[1]).slice(0, 50),
       spent: [...this.spent].slice(-500),
       owners: [...this.owners].slice(-300).map(([name, owner]) => [name, owner.level, owner.color ?? ""] as [string, number, string]),
       leaderboard: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 50)
@@ -88,10 +94,11 @@ export class EventMapper {
   }
 
   importState(state: Partial<MapperState>) {
-    const numbers = ["houseProgress", "landmarkProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat", "outstandingWear"] as const;
+    const numbers = ["houseProgress", "landmarkProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat", "outstandingWear", "capitolFund", "capitolStage"] as const;
     for (const key of numbers) if (typeof state[key] === "number" && Number.isFinite(state[key])) this[key] = state[key] as number;
     if (typeof state.recoveryActive === "boolean") this.recoveryActive = state.recoveryActive;
     if (state.snapshot) this.snapshot = { ...state.snapshot, pops: [] };
+    if (Array.isArray(state.donors)) this.donors = new Map(state.donors.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
     if (Array.isArray(state.spent)) this.spent = new Map(state.spent.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
     if (Array.isArray(state.owners)) for (const [name, level, color] of state.owners) if (typeof name === "string") this.owners.set(name, { level: Number(level) || 0, lastSeen: 0, earned: 0, color: color || undefined });
     if (Array.isArray(state.leaderboard)) this.leaderboard = new Map(state.leaderboard.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
@@ -221,14 +228,18 @@ export class EventMapper {
     if (attack) events.push(attack);
     const upkeep = this.updateUpkeep(signals, now, seconds);
     if (upkeep) events.push(upkeep);
+    const capitol = this.growCapitol(signals);
+    if (capitol) events.push(capitol);
     this.snapshot.upkeep = this.upkeep;
+    this.snapshot.capitol = this.capitol;
     return events;
   }
 
   private runCommands(signals: GrowthSignals, now: number): SimEvent[] {
     const events: SimEvent[] = [];
     const settings = config.commands;
-    for (const { user, command, color } of signals.commands.slice(0, settings.maxPerTick)) {
+    for (const { user, command, color, amount } of signals.commands.slice(0, settings.maxPerTick)) {
+      if (command === "donate") { const event = this.donate(user, amount, color, now); if (event) events.push(event); continue; }
       const rule = settings[command];
       if (!rule?.enabled) continue;
       if (color) this.colors.set(user, color);
@@ -245,6 +256,42 @@ export class EventMapper {
     }
     if (this.commandReadyAt.size > 2000) for (const [key, at] of this.commandReadyAt) if (at < now) this.commandReadyAt.delete(key);
     return events;
+  }
+
+  /** `!donate 10`: spend your own points on the capitol; donations count double. */
+  private donate(user: string, requested: number | undefined, color: string | undefined, now: number): SimEvent | undefined {
+    const rule = config.capitol.donate;
+    if (!rule.enabled) return undefined;
+    if (color) this.colors.set(user, color);
+    const key = `${user}|donate`;
+    if ((this.commandReadyAt.get(key) ?? 0) > now) return undefined;
+    const amount = Math.min(this.balance(user), Math.max(rule.minAmount, Math.floor(requested ?? rule.defaultAmount)));
+    if (amount < rule.minAmount) { this.commandReadyAt.set(key, now + 10_000); return { type: "command", command: "donate", user, ok: false, cost: rule.minAmount, reason: "points" }; }
+    this.commandReadyAt.set(key, now + rule.cooldownMs);
+    this.spent.set(user, (this.spent.get(user) ?? 0) + amount);
+    this.capitolFund += amount * config.capitol.donationMultiplier;
+    this.donors.set(user, (this.donors.get(user) ?? 0) + amount);
+    return { type: "command", command: "donate", user, ok: true, cost: amount };
+  }
+
+  /** The fund grows with every plus point; a stage completes when it is funded and the era allows. */
+  private growCapitol(signals: GrowthSignals): SimEvent | undefined {
+    const settings = config.capitol;
+    this.capitolFund += signals.plusPoints * settings.share;
+    const next = settings.stages[this.capitolStage];
+    if (!next || this.capitolFund < next.points || this.technologyEra < next.era) return undefined;
+    this.capitolStage++;
+    const donors = [...this.donors].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([name, points]) => ({ name, points, color: this.colors.get(name) }));
+    return { type: "capitol", stage: this.capitolStage, donors };
+  }
+
+  get capitol() {
+    const stages = config.capitol.stages;
+    const next = stages[this.capitolStage];
+    const previous = this.capitolStage > 0 ? stages[this.capitolStage - 1].points : 0;
+    return next
+      ? { stage: this.capitolStage, current: Math.max(0, this.capitolFund - previous), goal: next.points - previous, lockedUntilEra: this.technologyEra < next.era ? next.era : undefined }
+      : { stage: this.capitolStage, current: 1, goal: 1 };
   }
 
   /** Home owners who come back after a break, or keep contributing, see their home grow. */

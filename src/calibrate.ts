@@ -13,7 +13,7 @@ import type { ChatMessage, SimEvent } from "./types.js";
  *   npm run calibrate                # every log in logs/
  *   npm run calibrate -- logs/a.jsonl logs/b.jsonl
  */
-interface Report { wear: number; repairs: number; file: string; messages: number; minutes: number; built: number; lost: number; attacks: number; firstAttackMin?: number; longestQuietMin: number; worstMinute: number; finalScore: number; threshold: number; kinds: Record<string, number> }
+interface Report { capitol: number; wear: number; repairs: number; file: string; messages: number; minutes: number; built: number; lost: number; attacks: number; firstAttackMin?: number; longestQuietMin: number; worstMinute: number; finalScore: number; threshold: number; kinds: Record<string, number> }
 
 function simulate(file: string): Report | undefined {
   const messages: ChatMessage[] = [];
@@ -61,7 +61,7 @@ function simulate(file: string): Report | undefined {
   let longestQuiet = 0, previous = start;
   for (const at of [...attackTimes, end]) { longestQuiet = Math.max(longestQuiet, at - previous); previous = at; }
   return {
-    wear, repairs, file: file.split("/").pop()!, messages: messages.length, minutes, built, lost, attacks,
+    capitol: mapper.capitol.stage, wear, repairs, file: file.split("/").pop()!, messages: messages.length, minutes, built, lost, attacks,
     firstAttackMin: attackTimes.length ? (attackTimes[0] - start) / 60_000 : undefined,
     longestQuietMin: longestQuiet / 60_000,
     worstMinute: Math.max(0, ...lostByMinute.values()),
@@ -93,6 +93,7 @@ for (const file of files) {
   console.log(`  ${enoughTime ? mark(gapOk) : "-- "}minutes per attack ${Number.isFinite(gap) ? gap.toFixed(1) : "none"}${enoughTime ? "" : " (log under 15 min, not judged)"}   (target ${targets.minutesBetweenAttacks.join("-")}; ${report.attacks} attacks, first at ${report.firstAttackMin?.toFixed(1) ?? "-"} min, longest quiet ${report.longestQuietMin.toFixed(1)} min)`);
   console.log(`  ${mark(sizeOk)}lost per attack    ${perAttack.toFixed(1)}   (target ${targets.lostPerAttack.join("-")})`);
   console.log(`  ${mark(worstOk)}worst minute       ${report.worstMinute} lost   (max ${targets.maxLostPerMinute})`);
+  console.log(`  -- capitol           reached stage ${report.capitol} of 5`);
   console.log(`  -- upkeep            ${(report.wear / report.minutes * 60).toFixed(0)} wear steps/h, ${(report.repairs / report.minutes * 60).toFixed(0)} repairs/h (net ${report.wear - report.repairs})`);
   console.log(`  ${mark(growing)}city keeps growing ${growing ? "yes" : "no"}   · final score ${report.finalScore.toFixed(0)} · threshold now ${report.threshold.toFixed(1)} · attacks ${JSON.stringify(report.kinds)}`);
 }

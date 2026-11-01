@@ -51,6 +51,7 @@ const hud = new CityHud({
   screenPoint: () => city.screenPoint(city.focus),
   speakerPoint: () => city.speakerPoint(),
   featuredHome: () => city.featuredHome(),
+  capitolName: stage => city.capitolName(stage),
   cityName: chatChannel ? `${chatChannel} city` : params.get("name") ?? undefined
 });
 

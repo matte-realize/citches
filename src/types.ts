@@ -29,10 +29,15 @@ export type SimEvent =
   | { type: "command"; command: ChatCommand; user: string; ok: boolean; cost?: number; reason?: string }
   /** A home owner came back or kept contributing, so their home grows a level (1-3). */
   | { type: "homeUpgrade"; owner: string; level: number; color?: string }
+  /** The community capitol grew a stage; its top donors get banners. */
+  | { type: "capitol"; stage: number; donors: CapitolDonor[] }
   | { type: "disaster"; kind: AttackKind; intensity: number; damageCount?: number; durationMs?: number; reason?: string };
 
 export type AttackKind = "fire" | "meteor" | "storm" | "swarm";
-export type ChatCommand = "plant" | "repair" | "cheer" | "home";
+export type ChatCommand = "plant" | "repair" | "cheer" | "home" | "donate";
+export interface CapitolDonor { name: string; points: number; color?: string }
+/** Progress of the community capitol: stage 0 is the bare campfire, 5 the Grand Capitol. */
+export interface CapitolProgress { stage: number; current: number; goal: number; lockedUntilEra?: number }
 export interface ScorePop { label: string; points: number }
 /** Running city score shown in the overlay: total points, danger meter, and labelled pops for this tick. */
 export interface ChatHighlight { user: string; text: string }
@@ -44,6 +49,7 @@ export interface ScoreSnapshot {
   highlight?: ChatHighlight;
   /** Whether the city is currently wearing down from quiet chat, being repaired, or steady. */
   upkeep?: "decaying" | "repairing" | "steady";
+  capitol?: CapitolProgress;
 }
 
 export interface MessageSource {
