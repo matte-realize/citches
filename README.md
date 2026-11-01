@@ -65,6 +65,16 @@ Command messages are not scored, so they cannot be farmed for points. Failed com
 
 A city needs its community. When chat goes quiet compared with the channel's own normal pace (or drops below roughly one positive message a minute), buildings slowly wear down, oldest first: **weathered** (grime, weeds, cracks), **shabby** (darker, boarded windows, vines, lights out, a slight lean), **ruined** (rubble, a heavier lean), and finally they **collapse** into a rubble lot that can be rebuilt. At most one wear step happens a minute. Positive chat repairs the most worn buildings first, with sparkles and a `FIXED!` pop, and the scoreboard says whether quiet chat is wearing the city down or chat is repairing it. A small but kind chat never decays; a slow, neutral one stalls and looks run down until a burst of hype brings it back. Wear pauses once the city falls asleep, so ending a stream never turns the city to ruins. Tuning lives in `config.upkeep`, and `npm run calibrate` reports wear and repairs per hour.
 
+## Community over grind, and an endless story
+
+The city is meant to be a story a community keeps coming back to, not something to farm with a 24/7 stream or a bot.
+
+- **Per-chatter budget.** Each chatter earns full points up to a small budget every few minutes (`config.community.perChatterSoftCap`), then only a trickle, so a superfan or bot that posts nonstop counts about like one very engaged person. Known chat bots (Nightbot, StreamElements, Moobot, Fossabot and others, plus `IGNORE_USERS`) are ignored entirely.
+- **Community bonus.** More distinct chatters in the last few minutes grow the city faster (×0.8 to ×1.35, shown on the scoreboard as `N BUILDERS ×1.2`).
+- **Marathon fatigue.** After six hours awake, growth slowly tires (down to 40%, shown as `TIRED`) until the city has slept for two hours.
+- **Gentle rest.** While the city sleeps it still fades a little (one wear step every 20 minutes), and reopening it after time away applies a little capped wear, but nothing ever falls past "shabby" while nobody is there. Coming back after half an hour or more earns **WELCOME BACK**: repairs are half price for ten minutes.
+- **Endless chapters.** The scoreboard shows the day since the city was founded and progress to the next chapter. Chapters never run out (each needs a little more than the last) and are named after what the community did, such as "The Great Restoration", "The Siege of the Trolls" or "The Haters Washed Out". Each chapter raises a monument on a lot near the capitol, named for the chapter and its hero, and monuments are never worn down or attacked. The browser extension's popup shows the story so far.
+
 ## Day, night and bedtime
 
 The sun follows the local time: it rises in the east, arcs over the city (shadows move with it) and sets in the west, through pink dawns and orange dusks, with a moonlit night in between. Windows, street lamps and neon glow at night and fade by day, and fewer villagers and cars are out late. By default every viewer sees their own time of day; on Twitch the streamer can instead pin their own time zone on the configuration page. `?tz=Europe/Paris` follows a zone and `?hour=19` pins the time for demos.

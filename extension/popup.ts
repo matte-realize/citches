@@ -17,6 +17,7 @@ root.innerHTML = `
   <div class="field"><span>Civilization</span><div data-field="theme"></div></div>
   <div class="row"><span>Corner</span><div data-field="corner"></div></div>
   <div class="row"><span>Size</span><div data-field="size"></div></div>
+  ${channel ? `<section class="chronicle"><h2>THE STORY SO FAR</h2><ol class="chapters"><li class="empty">The first chapter is still being written…</li></ol></section>` : ""}
   ${channel ? `<button class="reset" type="button">Reset #${channel} city</button>` : ""}
   <p class="hint">Kind, thoughtful chat builds. Spam, caps and toxicity knock buildings down.</p>`;
 
@@ -29,6 +30,23 @@ const mount = (name: string, element: HTMLElement) => root.querySelector(`[data-
 mount("theme", pixelSelect(themeOptions(), settings.theme, value => { current.theme = value; save(); }, "Civilization"));
 mount("corner", pixelSelect([{ value: "br", label: "Bottom right" }, { value: "bl", label: "Bottom left" }], settings.corner, value => { current.corner = value as "br" | "bl"; save(); }, "Corner"));
 mount("size", pixelSelect([{ value: "small", label: "Small" }, { value: "medium", label: "Medium" }, { value: "large", label: "Large" }], settings.size, value => { current.size = value as "small" | "medium" | "large"; save(); }, "Size"));
+// The chronicle comes from the saved city for this channel.
+if (channel) {
+  const saved = (await chromeApi().storage.local.get(`city:${channel}`))[`city:${channel}`] as { mapper?: { chronicle?: Array<{ number: number; title: string; day: number; hero?: string }>; foundedAt?: number } } | undefined;
+  const chapters = saved?.mapper?.chronicle ?? [];
+  const list = root.querySelector(".chapters");
+  if (list && chapters.length) {
+    list.replaceChildren(...chapters.slice(-6).reverse().map(entry => {
+      const item = document.createElement("li");
+      const head = document.createElement("b");
+      head.textContent = `Ch.${entry.number} · ${entry.title}`;
+      const meta = document.createElement("small");
+      meta.textContent = `Day ${entry.day}${entry.hero ? ` · hero: ${entry.hero}` : ""}`;
+      item.append(head, meta);
+      return item;
+    }));
+  }
+}
 root.querySelector(".reset")?.addEventListener("click", async () => {
   if (!channel || !confirm(`Start #${channel}'s city over from a campfire?`)) return;
   await chromeApi().storage.local.remove(`city:${channel}`);

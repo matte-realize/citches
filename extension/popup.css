@@ -11,6 +11,12 @@ h1 { margin: 0 0 6px; font: 14px "Press Start 2P", monospace; color: var(--gold)
 .field { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 14px; font-size: 15px; }
 body { min-height: 470px; }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: #4fc46b; }
+.chronicle { margin-top: 16px; }
+.chronicle h2 { margin: 0 0 8px; font: 9px "Press Start 2P", monospace; color: var(--gold); }
+.chapters { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.chapters li { padding: 6px 8px; background: var(--panel-hi); box-shadow: 0 0 0 2px var(--ink); display: flex; flex-direction: column; gap: 2px; }
+.chapters b { font-size: 13px; }
+.chapters small, .chapters .empty { color: var(--muted); font-size: 12px; }
 .reset { width: 100%; margin-top: 8px; padding: 8px; font: 9px "Press Start 2P", monospace; color: var(--text); background: #6b2a2f; border: 0; box-shadow: 0 0 0 3px var(--ink), inset 0 -3px 0 #4a1c20; cursor: pointer; }
 .reset:hover { background: #82343a; }
 .hint { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.35; }

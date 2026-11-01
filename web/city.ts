@@ -914,12 +914,13 @@ export class ChatCity {
   onUpkeep?: (kind: "collapse" | "repair", at: Vector3) => void;
 
   private wearable() {
-    return this.tiles.filter(tile => tile.building && (tile.kind === "house" || tile.kind === "landmark") && tile.building.userData.collapse === undefined && (tile.building.userData.buildElapsed ?? 1) >= 0.82);
+    return this.tiles.filter(tile => tile.building && !tile.building.userData.monument && (tile.kind === "house" || tile.kind === "landmark") && tile.building.userData.collapse === undefined && (tile.building.userData.buildElapsed ?? 1) >= 0.82);
   }
 
   /** Quiet chat: an old building (chosen with a bias toward the oldest) gets more run down. */
-  private wearDown(historical: boolean) {
-    const candidates = this.wearable().sort((a, b) => (a.building!.userData.builtAt ?? 0) - (b.building!.userData.builtAt ?? 0));
+  private wearDown(historical: boolean, gentle = false) {
+    // Gentle wear (while asleep or away) stops at "shabby": nothing falls to ruin while nobody is here.
+    const candidates = this.wearable().filter(tile => !gentle || (tile.building!.userData.wear ?? 0) < 2).sort((a, b) => (a.building!.userData.builtAt ?? 0) - (b.building!.userData.builtAt ?? 0));
     if (!candidates.length) return;
     // Mostly the oldest third of the city, sometimes anywhere.
     const pool = this.random() < 0.75 ? candidates.slice(0, Math.max(1, Math.ceil(candidates.length / 3))) : candidates;
@@ -986,7 +987,7 @@ export class ChatCity {
 
   // ---------- the audience game: commands and owned homes ----------
   /** Lets the HUD show who did what: "@name planted a tree", name tags over homes, etc. */
-  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim" | "donate" | "capitol"; user: string; at?: Vector3; level?: number; cost?: number; color?: string }) => void;
+  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim" | "donate" | "capitol" | "chapter" | "welcome"; user: string; at?: Vector3; level?: number; cost?: number; color?: string; title?: string }) => void;
   private homesByOwner = new Map<string, Tile[]>();
 
   private ownerColor(owner: string, color?: string) {
@@ -1120,11 +1121,60 @@ export class ChatCity {
     });
   }
 
-  /** A random owned home (for the HUD's rotating name tags). */
+  /** A random owned home or monument (for the HUD's rotating name tags). */
   featuredHome() {
-    const owned = this.tiles.filter(tile => tile.building?.userData.owner);
+    const owned = this.tiles.filter(tile => tile.building?.userData.owner || tile.building?.userData.monument);
     const tile = owned[Math.floor(Math.random() * owned.length)];
-    return tile ? { owner: tile.building!.userData.owner as string, at: this.screenPoint(tile.group.position.clone().setY(0.4)), level: tile.building!.userData.ownerLevel as number } : undefined;
+    if (!tile) return undefined;
+    const data = tile.building!.userData;
+    const at = this.screenPoint(tile.group.position.clone().setY(0.5));
+    return data.monument
+      ? { owner: data.monumentLabel as string, at, level: 3, monument: true }
+      : { owner: data.owner as string, at, level: data.ownerLevel as number };
+  }
+
+  /**
+   * Each chapter of the city's story leaves a monument on a lot near the capitol: a figure on a
+   * plinth, named for the chapter and its hero. They are never worn down or attacked.
+   */
+  private raiseMonument(number: number, title: string, hero: string | undefined, historical: boolean) {
+    const center = this.hearthTile;
+    if (!center) return;
+    const lots = this.tiles.filter(tile => this.isOpenLot(tile) && this.findAccessPlan(tile));
+    lots.sort((a, b) => Math.hypot(a.x - center.x, a.z - center.z) - Math.hypot(b.x - center.x, b.z - center.z));
+    const tile = lots[0];
+    if (!tile) { if (!historical) this.onNotice?.({ kind: "chapter", user: hero ?? "", level: number, title }); return; }
+    for (const tree of tile.trees) tile.group.remove(tree);
+    tile.trees = [];
+    const building = new Group();
+    const stone = mat(this.theme.stone, 0.8);
+    const bronze = mat(number % 3 === 0 ? 0xffd35a : 0xb07a4a, 0.35, { metalness: 0.6 });
+    const lawn = new Mesh(new BoxGeometry(0.96, 0.012, 0.96), mat(this.theme.foliage[1], 1));
+    lawn.position.y = 0.006;
+    const plinth = new Mesh(new BoxGeometry(0.34, 0.24, 0.34), stone); plinth.position.y = 0.12;
+    const cap = new Mesh(new BoxGeometry(0.4, 0.04, 0.4), stone); cap.position.y = 0.26;
+    const body = new Mesh(new CylinderGeometry(0.06, 0.09, 0.3, 8), bronze); body.position.y = 0.43;
+    const head = new Mesh(new SphereGeometry(0.06, 8, 6), bronze); head.position.y = 0.63;
+    const arm = new Mesh(new BoxGeometry(0.03, 0.22, 0.03), bronze); arm.position.set(0.08, 0.62, 0); arm.rotation.z = -0.5;
+    const plaque = new Mesh(new BoxGeometry(0.18, 0.08, 0.01), mat(0x2a2620, 0.6)); plaque.position.set(0, 0.13, 0.176);
+    building.add(lawn, plinth, cap, body, head, arm, plaque);
+    for (let i = 0; i < 4; i++) {
+      const bloom = new Mesh(new SphereGeometry(0.03, 5, 4), mat([0xe46a8a, 0xf2c94c, 0xb98be0, 0xf5f0e6][i], 0.9));
+      bloom.position.set(Math.sin(i * 1.57) * 0.3, 0.04, Math.cos(i * 1.57) * 0.3);
+      building.add(bloom);
+    }
+    if (!this.connectNewBuilding(tile, building)) return;
+    tile.group.add(building);
+    tile.building = building;
+    tile.kind = "landmark";
+    building.userData.special = true;
+    building.userData.monument = true;
+    building.userData.monumentLabel = hero ? `Ch.${number} ${title} · ${hero}` : `Ch.${number} ${title}`;
+    this.animateBuild(building, tile, historical);
+    if (!historical) {
+      this.focus.copy(tile.group.position);
+      this.onNotice?.({ kind: "chapter", user: hero ?? "", at: tile.group.position.clone(), level: number, title });
+    }
   }
 
   private setWear(tile: Tile, level: number) {
@@ -1624,7 +1674,7 @@ export class ChatCity {
   }
 
   disaster(intensity: number, historical = false, damageCount?: number, durationMs = 3600, kind: AttackKind = "fire") {
-    const occupied = this.tiles.filter(tile => tile.building && (tile.kind === "house" || tile.kind === "landmark"));
+    const occupied = this.tiles.filter(tile => tile.building && !tile.building.userData.monument && (tile.kind === "house" || tile.kind === "landmark"));
     const count = Math.min(occupied.length, Math.max(1, damageCount ?? Math.ceil(intensity * 2.4)));
     // Trouble arrives from outside: outskirts homes are hit first, landmarks last.
     const hearth = this.hearthTile;
@@ -1846,7 +1896,9 @@ export class ChatCity {
     else if (event.type === "boom") this.boom(event.viewers, historical);
     else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs, event.kind);
     else if (event.type === "effect" && !historical) { this.fireworks(this.focus.x, this.focus.z, event.intensity); this.life.cheer(3); }
-    else if (event.type === "decay") for (let i = 0; i < event.count; i++) this.wearDown(historical);
+    else if (event.type === "decay") for (let i = 0; i < event.count; i++) this.wearDown(historical, event.gentle);
+    else if (event.type === "chapter") this.raiseMonument(event.number, event.title, event.hero, historical);
+    else if (event.type === "welcome" && !historical) { this.life.cheer(4); this.onNotice?.({ kind: "welcome", user: "", level: Math.round(event.awayHours) }); }
     else if (event.type === "repair") for (let i = 0; i < event.count; i++) { const at = this.repairOne(historical); if (event.by && at && !historical) this.onNotice?.({ kind: "repair", user: event.by, at }); }
   }
 

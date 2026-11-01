@@ -31,7 +31,7 @@ export interface HudOptions {
   /** Theme name of a capitol stage. */
   capitolName?: (stage: number) => string;
   /** A random owned home, for rotating name tags. */
-  featuredHome?: () => { owner: string; at: { x: number; y: number }; level: number } | undefined;
+  featuredHome?: () => { owner: string; at: { x: number; y: number }; level: number; monument?: boolean } | undefined;
 }
 
 /**
@@ -51,6 +51,8 @@ export class CityHud {
   private leaders = el("div", "leaders-row");
   private upkeepLine = el("div", "upkeep-line");
   private hint = el("div", "command-hint");
+  private caption = el("div", "score-caption");
+  private storyLine = el("div", "story-line");
   private capitolRow = el("div", "meter-row capitol-row");
   private capitolLabel = el("div", "capitol-label", "⌂ CAPITOL");
   private capitolFill = el("div", "meter-fill capitol-fill");
@@ -70,7 +72,8 @@ export class CityHud {
   constructor(private options: HudOptions) {
     const board = el("section", "scoreboard");
     const scoreRow = el("div", "score-row");
-    scoreRow.append(el("div", "score-caption", options.cityName ? options.cityName.toUpperCase() : "CITY POINTS"), this.total, this.delta);
+    scoreRow.append(this.caption, this.total, this.delta);
+    this.caption.textContent = options.cityName ? options.cityName.toUpperCase() : "CITY POINTS";
     const eraRow = el("div", "meter-row");
     const eraMeter = el("div", "meter era-meter");
     eraMeter.append(this.eraFill);
@@ -87,10 +90,11 @@ export class CityHud {
     dangerRow.after(this.capitolRow);
     this.upkeepLine.hidden = true;
     this.hint.innerHTML = "SPEND POINTS: <b>!plant</b> <b>!repair</b> <b>!cheer</b> <b>!donate</b> <b>!home</b>";
-    board.append(scoreRow, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery, this.hint);
+    this.storyLine.hidden = true;
+    board.append(scoreRow, this.storyLine, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery, this.hint);
     if (options.featuredHome) setInterval(() => {
       const home = options.featuredHome?.();
-      if (home && !document.body.classList.contains("city-asleep")) this.nameTag(home.owner, home.at, home.level);
+      if (home && !document.body.classList.contains("city-asleep")) this.nameTag(home.owner, home.at, home.level, home.monument);
     }, 14_000);
     this.sleepSign.hidden = true;
     this.sleepSign.append(el("span", "sleep-moon", "☾"), el("span", "sleep-text", "STREAM OFFLINE · THE CITY IS SLEEPING"));
@@ -143,6 +147,14 @@ export class CityHud {
       }));
     }
     if (!replay && score.highlight) this.say(score.highlight.user, score.highlight.text);
+    if (score.story) {
+      const story = score.story;
+      const base = this.options.cityName ? this.options.cityName.toUpperCase() : "CITY POINTS";
+      this.caption.textContent = `${base} · DAY ${story.day}`;
+      this.storyLine.hidden = false;
+      const community = score.community;
+      this.storyLine.textContent = `CH.${story.chapter + 1} ${Math.round(Math.min(1, story.next / Math.max(1, story.goal)) * 100)}%${story.title ? ` · LAST: ${story.title.toUpperCase()}` : ""}${community ? ` · ${community.chatters} BUILDERS ×${community.multiplier.toFixed(1)}${community.tired ? " · TIRED" : ""}` : ""}`;
+    }
     if (score.capitol) {
       const capitol = score.capitol;
       const name = (stage: number) => this.options.capitolName?.(stage) ?? `STAGE ${stage}`;
@@ -192,9 +204,9 @@ export class CityHud {
   }
 
   /** Name tag floating over a chatter's home. */
-  nameTag(owner: string, at: { x: number; y: number }, level = 1) {
-    const tag = el("div", "name-tag");
-    tag.append(el("span", "name-tag-icon", level >= 3 ? "★" : "⌂"), el("span", "name-tag-name", `${owner}'s home`));
+  nameTag(owner: string, at: { x: number; y: number }, level = 1, monument = false) {
+    const tag = el("div", `name-tag${monument ? " monument-tag" : ""}`);
+    tag.append(el("span", "name-tag-icon", monument ? "♜" : level >= 3 ? "★" : "⌂"), el("span", "name-tag-name", monument ? owner : `${owner}'s home`));
     tag.style.left = `${Math.max(90, Math.min(innerWidth - 90, at.x))}px`;
     tag.style.top = `${Math.max(60, Math.min(innerHeight - 160, at.y))}px`;
     this.popLayer.appendChild(tag);
@@ -202,7 +214,9 @@ export class CityHud {
   }
 
   /** What a chat command did, credited to whoever typed it. */
-  notice(kind: string, user: string, at?: { x: number; y: number }, extra: { level?: number; cost?: number } = {}) {
+  notice(kind: string, user: string, at?: { x: number; y: number }, extra: { level?: number; cost?: number; title?: string } = {}) {
+    if (kind === "chapter") { this.banner(`CHAPTER ${extra.level ?? ""}: ${(extra.title ?? "").toUpperCase()}`, "era"); if (user) this.say("THE CHRONICLE", `${user} is the hero of chapter ${extra.level}!`); return; }
+    if (kind === "welcome") { this.banner("WELCOME BACK! REPAIRS HALF PRICE", "raid"); return; }
     const text: Record<string, string> = {
       plant: `${user} planted a tree`,
       repair: `${user} repaired a building`,

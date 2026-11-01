@@ -117,6 +117,11 @@ html.overlay .score-total { font-size: 18px; }
 .pop-credit { color: var(--gold); text-shadow: 2px 2px 0 var(--gold-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); }
 .pop-credit .pop-label { font-size: 16px; color: var(--text); }
 
+/* Story. */
+.story-line { margin-top: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .02em; }
+.monument-tag { background: #2a2416; }
+.monument-tag .name-tag-icon { color: #ffe08a; }
+
 /* Community capitol. */
 .capitol-label { flex: 0 0 auto; min-width: 108px; font-size: 13px; color: #ffe08a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 .capitol-fill { background: linear-gradient(180deg, #ffe9a8 0 35%, #e0a83a 35% 100%); }

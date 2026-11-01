@@ -42,7 +42,7 @@ export const config = {
      * more negativity to do damage; small friendly ones feel a few trolls. `destroyThreshold` is
      * the starting value before there is any history.
      */
-    destroyThreshold: 4.5, minThreshold: 2.5, maxThreshold: 14, adaptiveShare: 0.1, rateWindowSeconds: 90,
+    destroyThreshold: 4.5, minThreshold: 2.2, maxThreshold: 14, adaptiveShare: 0.09, rateWindowSeconds: 90,
     maxDestroysPerPulse: 5, cooldownMs: 180_000,
     decayPerSecond: 0.06, positiveDefense: 0.18,
     /** Danger above this many pulses' worth is dropped, so a burst of trolls cannot snowball. */
@@ -102,11 +102,32 @@ export const config = {
       { points: 1700, era: 4 }  // 5 Grand Capitol
     ]
   },
+  /**
+   * Community over grind. Each chatter's plus points shrink as they pile up within a few minutes
+   * (so one superfan or bot cannot carry the city), more distinct chatters speed growth up, and
+   * very long continuous sessions slowly tire growth until the city has slept.
+   */
+  community: {
+    perChatterSoftCap: 14, perChatterWindowMinutes: 5,
+    /** Chat bots never build, score or appear on leaderboards (add your own with IGNORE_USERS). */
+    ignoreUsers: ["nightbot", "streamelements", "moobot", "fossabot", "streamlabs", "soundalerts", "wizebot", "botisimo", "sery_bot", "kofistreambot", "pokemoncommunitygame", "commanderroot", "streamstickers", ...(env.IGNORE_USERS ?? "").split(",").map(name => name.trim().toLowerCase()).filter(Boolean)],
+    breadthWindowMinutes: 5, minMultiplier: 0.8, maxMultiplier: 1.35,
+    fatigueAfterHours: 6, fatiguePerHour: 0.1, minFatigue: 0.4, restHours: 2
+  },
+  /**
+   * While the city sleeps it still fades, gently: one wear step every `sleepWearMinutes`, never past
+   * "shabby". Coming back after `welcomeAfterMinutes` makes repairs half price for a while.
+   */
+  rest: { sleepWearMinutes: 20, maxTimeAwaySteps: 10, timeAwayStepsPerHour: 2, welcomeAfterMinutes: 30, welcomeMinutes: 10 },
+  /** Endless story: each chapter needs a little more community effort than the last. */
+  story: { firstChapterPoints: 120, chapterGrowth: 1.3 },
   /** Owned homes grow when their owner comes back after a break or keeps contributing. */
   homes: { returnGapMs: 10 * 60_000, upgradePoints: 30, maxLevel: 3 },
   /** What `npm run calibrate` checks the danger system against, using real chat logs. */
   calibration: {
-    lostPerBuilt: [0.03, 0.3] as [number, number],     // losses are noticeable but never outpace growth
+    // Losses are noticeable but never outpace growth. Very busy chats build ~40 homes a minute while
+    // attacks stay capped as events (one per 3 min), so their ratio sits lowest; hence the 2.5% floor.
+    lostPerBuilt: [0.025, 0.3] as [number, number],
     minutesBetweenAttacks: [3, 8] as [number, number],  // an attack is an event, not background noise
     lostPerAttack: [1, 4] as [number, number],          // average buildings taken per attack
     maxLostPerMinute: 6                                   // worst minute, outside of hate events

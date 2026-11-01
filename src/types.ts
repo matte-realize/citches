@@ -23,7 +23,12 @@ export type SimEvent =
   | { type: "effect"; kind: "fireworks"; intensity: number }
   | { type: "boom"; viewers: number }
   /** Quiet chat wears one building down a step; positive chat repairs the most worn one. */
-  | { type: "decay"; count: number }
+  /** `gentle` wear happens while the city sleeps and never takes a building past "shabby". */
+  | { type: "decay"; count: number; gentle?: boolean }
+  /** The story moves on: an endless sequence of chapters named after what the community did. */
+  | { type: "chapter"; number: number; title: string; day: number; hero?: string }
+  /** The community came back after a long break: repairs are half price for a while. */
+  | { type: "welcome"; awayHours: number }
   | { type: "repair"; count: number; by?: string }
   /** A chat command: `ok` is false when the chatter could not afford it (`cost`) or it did nothing. */
   | { type: "command"; command: ChatCommand; user: string; ok: boolean; cost?: number; reason?: string }
@@ -50,7 +55,11 @@ export interface ScoreSnapshot {
   /** Whether the city is currently wearing down from quiet chat, being repaired, or steady. */
   upkeep?: "decaying" | "repairing" | "steady";
   capitol?: CapitolProgress;
+  /** How representative the current crowd is, and whether a marathon session is tiring growth. */
+  community?: { chatters: number; multiplier: number; tired: boolean };
+  story?: { day: number; chapter: number; title?: string; next: number; goal: number };
 }
+export interface ChronicleEntry { number: number; title: string; day: number; hero?: string }
 
 export interface MessageSource {
   connect(): Promise<void>;

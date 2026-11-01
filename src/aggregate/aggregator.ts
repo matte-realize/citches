@@ -30,6 +30,8 @@ export class Aggregator {
   private pending: Array<{ message: ChatMessage; category: Category; signal: ReturnType<typeof analyzeMessage>; hits: ScoreHit[] }> = [];
   private scoreContext = new ScoreContext();
   private pendingCommands: Array<{ user: string; command: ChatCommand; color?: string; amount?: number }> = [];
+  /** Recent plus points per chatter, decaying over a few minutes, for diminishing returns. */
+  private chatterRecent = new Map<string, { points: number; at: number }>();
   private timer?: ReturnType<typeof setInterval>;
   constructor(
     private tick: (aggregate: Aggregate, deltaCounts: Counts, deltaRaidViewers: number, growthSignals: GrowthSignals) => void,
@@ -37,7 +39,10 @@ export class Aggregator {
     private tickMs = config.aggregateTickMs
   ) {}
   /** `receivedAt` defaults to now; the calibration harness passes each message's own timestamp. */
+  private ignored = new Set(config.community.ignoreUsers);
+
   add(message: ChatMessage, receivedAt = Date.now()) {
+    if (this.ignored.has(message.user.toLowerCase())) return;
     // Commands act on the city but are not scored, so they cannot be farmed for points.
     const command = COMMAND.exec(message.text.trim());
     if (command) { this.pendingCommands.push({ user: message.user, command: command[1].toLowerCase() as ChatCommand, color: message.color, amount: command[2] ? Number(command[2]) : undefined }); return; }
@@ -68,7 +73,18 @@ export class Aggregator {
       const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, scoredMessages: 0, minusMessages: 0, byRule: {}, byLabel: {}, byUser: {}, commands: this.pendingCommands, colors: {} };
       this.pendingCommands = [];
       let deltaRaidViewers = 0;
-      for (const { message, category, signal, hits } of this.pending) {
+      for (const { message, category, signal, hits: rawHits } of this.pending) {
+        // Diminishing returns: the more one chatter has just earned, the less each new message adds.
+        const soft = config.community.perChatterSoftCap;
+        const recent = this.chatterRecent.get(message.user);
+        const window = config.community.perChatterWindowMinutes * 60_000;
+        const carried = recent ? recent.points * Math.exp(-(now - recent.at) / window) : 0;
+        // Full value up to a per-chatter budget, then only a trickle: a fast poster or bot can earn
+        // roughly one budget per window, no matter how much it types.
+        const factor = Math.max(0.04, 1 - carried / soft);
+        const hits = rawHits.map(hit => hit.points > 0 ? { ...hit, points: hit.points * factor } : hit);
+        const gained = hits.reduce((sum, hit) => sum + Math.max(0, hit.points), 0);
+        if (gained > 0) this.chatterRecent.set(message.user, { points: carried + gained, at: now });
         growthSignals.scoredMessages++;
         if (message.color) growthSignals.colors[message.user] = message.color;
         const negative = hits.some(hit => hit.points < 0);
@@ -92,6 +108,7 @@ export class Aggregator {
         growthSignals.supportPoints += signal.supportPoints;
       }
       this.pending = [];
+      if (this.chatterRecent.size > 3000) for (const [user, entry] of this.chatterRecent) if (now - entry.at > 30 * 60_000) this.chatterRecent.delete(user);
       this.tick({ timestamp: now, counts, messagesPerSecond: recent.length / (this.windowMs / 1000), raidViewers, supportPoints }, deltaCounts, deltaRaidViewers, growthSignals);
     }
   }

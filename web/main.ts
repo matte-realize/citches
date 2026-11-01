@@ -44,7 +44,7 @@ const city = new ChatCity(host, themeFromSearch(`?${params}`), {
   hour: params.has("hour") ? Number(params.get("hour")) : undefined
 });
 city.onUpkeep = (kind, at) => hud.upkeepPop(kind, city.screenPoint(at));
-city.onNotice = notice => hud.notice(notice.kind, notice.user, notice.at ? city.screenPoint(notice.at) : undefined, { level: notice.level, cost: notice.cost });
+city.onNotice = notice => hud.notice(notice.kind, notice.user, notice.at ? city.screenPoint(notice.at) : undefined, { level: notice.level, cost: notice.cost, title: notice.title });
 if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) (window as unknown as { chatCity: ChatCity }).chatCity = city;
 const hud = new CityHud({
   overlay,

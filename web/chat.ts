@@ -123,6 +123,10 @@ export class TwitchChatFeed implements CityFeed {
     if (saved) {
       this.mapper.importState(saved.mapper);
       this.history = saved.events.filter(event => event.type !== "effect");
+      // Time the city spent closed: gentle, capped wear, never to ruin.
+      const away = this.mapper.timeAway(Date.now() - saved.savedAt);
+      this.history.push(...away);
+      if (away.length) this.dirty = true;
       onTick({ type: "tick", events: this.history, progress: this.mapper.progress, score: this.mapper.score, replay: true });
     }
     this.aggregator = new Aggregator((aggregate, delta, raidViewers, signals) => {
