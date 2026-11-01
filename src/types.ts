@@ -17,7 +17,7 @@ export interface CommunityProgress {
 }
 export type SimEvent =
   | { type: "advancement"; era: number; name: string }
-  | { type: "build"; kind: "house" | "landmark"; count: number }
+  | { type: "build"; kind: "house" | "landmark"; count: number; builders?: string[] }
   | { type: "effect"; kind: "fireworks"; intensity: number }
   | { type: "boom"; viewers: number }
   | { type: "disaster"; kind: AttackKind; intensity: number; damageCount?: number; durationMs?: number; reason?: string };
@@ -25,7 +25,14 @@ export type SimEvent =
 export type AttackKind = "fire" | "meteor" | "storm" | "swarm";
 export interface ScorePop { label: string; points: number }
 /** Running city score shown in the overlay: total points, danger meter, and labelled pops for this tick. */
-export interface ScoreSnapshot { total: number; gained: number; lost: number; threat: number; threatRatio: number; pops: ScorePop[] }
+export interface ChatHighlight { user: string; text: string }
+export interface ScoreSnapshot {
+  total: number; gained: number; lost: number; threat: number; threatRatio: number; pops: ScorePop[];
+  /** Chatters who have earned the city the most points this session. */
+  topBuilders?: Array<{ name: string; points: number }>;
+  /** The most wholesome message of this tick, for villagers to say out loud. */
+  highlight?: ChatHighlight;
+}
 
 export interface MessageSource {
   connect(): Promise<void>;

@@ -8,7 +8,8 @@
     "replay": "node --import tsx/esm src/replay.ts",
     "dev:web": "vite --host 0.0.0.0",
     "build:web": "tsc -p web/tsconfig.json && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:extension": "tsc -p web/tsconfig.json && tsc -p extension/tsconfig.json && vite build -c vite.extension.config.ts && vite build -c vite.extension-content.config.ts"
   },
   "dependencies": {
     "@fontsource/pixelify-sans": "^5.2.5",

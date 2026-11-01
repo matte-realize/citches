@@ -21,7 +21,14 @@ function wavy(text: string, className: string) {
   return node;
 }
 
-export interface HudOptions { overlay: boolean; screenPoint: () => { x: number; y: number } }
+export interface HudOptions {
+  overlay: boolean;
+  screenPoint: () => { x: number; y: number };
+  /** Screen point above a random villager, for speech bubbles. */
+  speakerPoint?: () => { x: number; y: number } | undefined;
+  /** Name shown on the scoreboard, e.g. "XQC CITY". */
+  cityName?: string;
+}
 
 /**
  * Playful pixel HUD: a bouncing city-points counter, a danger meter that fills with minuses,
@@ -37,18 +44,20 @@ export class CityHud {
   private dangerFill = el("div", "meter-fill danger-fill");
   private dangerMeter = el("div", "meter danger-meter");
   private recovery = el("div", "recovery-row");
+  private leaders = el("div", "leaders-row");
+  private lastBubbleAt = 0;
   private popLayer = el("div", "pop-layer");
   private bannerLayer = el("div", "banner-layer");
   private shownTotal = 0;
   private targetTotal = 0;
-  private popQueue: Array<{ label: string; points: number; unit?: string }> = [];
+  private popQueue: Array<{ label: string; points: number; unit?: string; credit?: boolean }> = [];
   private lastPopAt = 0;
   private live = 0;
 
   constructor(private options: HudOptions) {
     const board = el("section", "scoreboard");
     const scoreRow = el("div", "score-row");
-    scoreRow.append(el("div", "score-caption", "CITY POINTS"), this.total, this.delta);
+    scoreRow.append(el("div", "score-caption", options.cityName ? options.cityName.toUpperCase() : "CITY POINTS"), this.total, this.delta);
     const eraRow = el("div", "meter-row");
     const eraMeter = el("div", "meter era-meter");
     eraMeter.append(this.eraFill);
@@ -57,7 +66,8 @@ export class CityHud {
     this.dangerMeter.append(this.dangerFill);
     dangerRow.append(el("div", "danger-label", "DANGER"), this.dangerMeter);
     this.recovery.hidden = true;
-    board.append(scoreRow, eraRow, dangerRow, this.recovery);
+    this.leaders.hidden = true;
+    board.append(scoreRow, eraRow, dangerRow, this.leaders, this.recovery);
     this.root.append(this.popLayer, this.bannerLayer, board);
     document.body.appendChild(this.root);
     requestAnimationFrame(this.tick);
@@ -97,6 +107,15 @@ export class CityHud {
     if (!replay) for (const pop of score.pops) {
       if (this.popQueue.length < 14) this.popQueue.push(pop);
     }
+    if (score.topBuilders?.length) {
+      this.leaders.hidden = false;
+      this.leaders.replaceChildren(el("span", "leaders-caption", "TOP BUILDERS"), ...score.topBuilders.map((leader, index) => {
+        const chip = el("span", `leader leader-${index}`);
+        chip.append(el("span", "leader-name", leader.name), el("span", "leader-points", String(leader.points)));
+        return chip;
+      }));
+    }
+    if (!replay && score.highlight) this.say(score.highlight.user, score.highlight.text);
   }
 
   setProgress(progress: CommunityProgress) {
@@ -110,7 +129,27 @@ export class CityHud {
     if (recovery.active) this.recovery.textContent = `REBUILDING ${Math.round(recovery.ratio * 100)}% · ${ERA_NAMES[recovery.era] ?? ""} HOMES`;
   }
 
+  /** A villager repeats a wholesome chat message in a pixel speech bubble. */
+  private say(user: string, text: string) {
+    const now = performance.now();
+    if (now - this.lastBubbleAt < 3200) return;
+    const at = this.options.speakerPoint?.();
+    if (!at) return;
+    this.lastBubbleAt = now;
+    const bubble = el("div", "speech");
+    bubble.append(el("span", "speech-user", user), el("span", "speech-text", text.length > 64 ? `${text.slice(0, 62)}…` : text));
+    bubble.style.left = `${Math.max(120, Math.min(innerWidth - 120, at.x))}px`;
+    bubble.style.top = `${Math.max(70, Math.min(innerHeight - 170, at.y))}px`;
+    this.popLayer.appendChild(bubble);
+    setTimeout(() => bubble.remove(), 4200);
+  }
+
   event(event: SimEvent) {
+    if (event.type === "build" && event.builders?.length) {
+      const what = event.kind === "landmark" ? "LANDMARK" : event.count > 1 ? `${event.count} HOMES` : "HOME";
+      this.popQueue.unshift({ label: `by ${event.builders.join(" & ")}`, points: event.count, unit: what, credit: true });
+      return;
+    }
     if (event.type === "disaster") {
       // Small destruction pulses pop out of the city like build points; only big hits get a banner.
       const lost = event.damageCount ?? 1;
@@ -129,9 +168,9 @@ export class CityHud {
     setTimeout(() => banner.remove(), 3400);
   }
 
-  private spawnPop(pop: { label: string; points: number; unit?: string }) {
+  private spawnPop(pop: { label: string; points: number; unit?: string; credit?: boolean }) {
     const anchor = this.options.screenPoint();
-    const node = el("div", `pop ${pop.points >= 0 ? "pop-plus" : "pop-minus"}${pop.unit ? " pop-wreck" : ""}`);
+    const node = el("div", `pop ${pop.points >= 0 ? "pop-plus" : "pop-minus"}${pop.unit ? " pop-wreck" : ""}${pop.credit ? " pop-credit" : ""}`);
     node.append(el("span", "pop-points", `${pop.points >= 0 ? "+" : ""}${pop.points}${pop.unit ? ` ${pop.unit}` : ""}`), el("span", "pop-label", pop.label));
     const spread = this.options.overlay ? 70 : 120;
     const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));

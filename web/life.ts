@@ -49,6 +49,8 @@ export class CityLife {
   private houses = 0;
   private populationClock = 0;
   private clock = 0;
+  /** Crowd caps; the overlay runs inside another busy page, so it uses lighter limits. */
+  limits = { people: 48, cars: 22 };
 
   constructor(private root: Group, private host: LifeHost, private theme: CityTheme, private themeId: CityThemeId) {}
 
@@ -108,6 +110,17 @@ export class CityLife {
       const agent = this.addAgent("person", rig.root, seat.pos, { rig, state: "gather", seat, heading: seat.face, timer: 2 + this.random() * 6, anchor: center.clone() });
       seat.taken = agent;
     }
+  }
+
+  private joinGathering() {
+    const seat = this.seats.find(candidate => !candidate.taken);
+    if (!seat) return;
+    // Newcomers walk in from the edge of the clearing rather than appearing on the log.
+    const rig = makePerson(this.random, this.era, this.themeId, this.theme);
+    const outward = seat.pos.clone().sub(this.seats[0].pos.clone().add(this.seats[3]?.pos ?? this.seats[0].pos).multiplyScalar(0.5)).setY(0).normalize();
+    const start = seat.pos.clone().addScaledVector(outward, 1.2);
+    const agent = this.addAgent("person", rig.root, start, { rig, state: "roam", seat, target: seat.pos, timer: 3 + this.random() * 5, scale: 1 });
+    seat.taken = agent;
   }
 
   addSheep(pasture: Vector3) {
@@ -254,6 +267,13 @@ export class CityLife {
     agent.state = "toLane";
   }
 
+  /** World position above a random visible villager (used for chat speech bubbles). */
+  speakerPosition(): Vector3 | undefined {
+    const people = this.agents.filter(agent => agent.kind === "person" && agent.scale > 0.9);
+    const speaker = people[Math.floor(this.random() * people.length)];
+    return speaker ? speaker.group.position.clone().setY(0.62) : undefined;
+  }
+
   // ---------- events from the city ----------
   panic(center: Vector3, radius: number, seconds: number) {
     for (const agent of this.agents) {
@@ -294,13 +314,16 @@ export class CityLife {
 
   private managePopulation() {
     const count = (kind: Kind) => this.agents.filter(agent => agent.kind === kind && agent.state !== "leave").length;
-    const walkers = this.agents.filter(agent => agent.kind === "person" && agent.state !== "gather").length;
-    const wantPeople = this.doors.length && this.linked.length + this.doors.length > 1 ? Math.min(48, 2 + Math.round(this.houses * 0.8)) : 0;
+    const walkers = this.agents.filter(agent => agent.kind === "person" && agent.state !== "gather" && !(agent.seat && agent.state === "roam")).length;
+    // More villagers gather round the fire as the first huts appear (one per home, up to five).
+    const gatherers = this.agents.filter(agent => agent.kind === "person" && agent.seat).length;
+    if (this.seats.length && gatherers < Math.min(5, 1 + this.houses)) this.joinGathering();
+    const wantPeople = this.doors.length && this.linked.length + this.doors.length > 1 ? Math.min(this.limits.people, 2 + Math.round(this.houses * 0.8)) : 0;
     if (walkers < wantPeople) this.spawnPerson();
     const roads = this.linked.length;
     if (this.era >= 2 && this.era < 4 && count("wagon") < Math.min(5, Math.floor(roads / 6))) this.spawnVehicle("wagon");
     if (this.era >= 4) {
-      if (count("car") < Math.min(22, Math.floor(roads / 3.5))) this.spawnVehicle("car");
+      if (count("car") < Math.min(this.limits.cars, Math.floor(roads / 3.5))) this.spawnVehicle("car");
       if (this.era >= 5 && count("bus") < Math.min(3, Math.floor(roads / 18))) this.spawnVehicle("bus");
     }
   }

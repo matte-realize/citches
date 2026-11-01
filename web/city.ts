@@ -6,6 +6,8 @@ import type { ColorRepresentation, Material, MeshStandardMaterialParameters } fr
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
 import { HomeKit } from "./homes.js";
+import { SpecialKit } from "./specials.js";
+import type { Animated } from "./specials.js";
 import { bakeStatic, disposeObject } from "./kit.js";
 import { CityLife } from "./life.js";
 import type { Door, NetCell } from "./life.js";
@@ -17,12 +19,12 @@ export { CITY_THEMES } from "./theme.js";
 export type { CityThemeId } from "./theme.js";
 
 type TileKind = "empty" | "house" | "landmark" | "fire";
-type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number };
+type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number; index: number };
 type Particle = { position: Vector3; velocity: Vector3; size: number; color: Color; life: number; maxLife: number; gravity: number; drag?: number };
 const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
 /** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 1.5 = default pixel art). */
-export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number }
+export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number; maxFps?: number }
 
 const GRID = 32;
 export function themeFromSearch(search = window.location.search): CityThemeId {
@@ -53,6 +55,29 @@ export class ChatCity {
     return mesh;
   })();
   private particleDummy = new Object3D();
+  /** All ground tiles are instances of one slab: a single draw call however big the plot grows. */
+  private ground = (() => {
+    const mesh = new InstancedMesh(new BoxGeometry(0.99, 0.12, 0.99), new MeshStandardMaterial({ roughness: 0.88 }), GRID * GRID);
+    mesh.receiveShadow = true;
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    return mesh;
+  })();
+  private groundDirty = true;
+  /** The shadow map is only redrawn when something that casts a shadow changes. */
+  private shadowsDirty = true;
+  private maxFps: number;
+  private frameBudget = 0;
+
+  private writeGround(tile: Tile) {
+    const dummy = this.particleDummy;
+    if (!tile.group.visible) dummy.scale.setScalar(0);
+    else dummy.scale.set(1, tile.group.scale.y, 1);
+    dummy.position.set(tile.group.position.x, tile.group.position.y - 0.06 * tile.group.scale.y, tile.group.position.z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.updateMatrix();
+    this.ground.setMatrixAt(tile.index, dummy.matrix);
+    this.groundDirty = true;
+  }
   /**
    * Fires and lightning share a fixed pool of point lights. Adding or removing lights changes
    * three.js shader variants and recompiles every material, so the light count never changes.
@@ -90,6 +115,11 @@ export class ChatCity {
   private streetCells = new Map<string, NetCell>();
   private life: CityLife;
   private homes: HomeKit;
+  private specials: SpecialKit;
+  /** Spinning sails, blinking beacons and chimney smoke, tied to the building they belong to. */
+  private animated: Array<{ tile: Tile; building: Group; part: Animated }> = [];
+  private buildsSinceSpecial = 0;
+  private birdClock = 12;
   private actorClock = 0;
   private hearthTile?: Tile;
   private shake = 0;
@@ -119,14 +149,20 @@ export class ChatCity {
   private pixelSize: number;
   private composer?: EffectComposer;
   private cameraBase = new Vector3(35, 43, 35);
+  /** Camera orbit in quarter turns; the view swings smoothly to each 90 degree step. */
+  private viewAngle = 0;
+  private targetViewAngle = 0;
+  private viewQuarter = 0;
 
   constructor(private host: HTMLElement, themeId: CityThemeId = themeFromSearch(), options: CityOptions = {}) {
     this.themeId = themeId;
     this.theme = CITY_THEMES[themeId];
     this.transparent = Boolean(options.transparent);
     this.zoom = options.zoom && options.zoom > 0 ? options.zoom : 1;
+    this.maxFps = options.maxFps ?? 60;
     this.randomState = [...themeId].reduce((seed, char) => Math.imul(seed ^ char.charCodeAt(0), 16777619) >>> 0, 2166136261);
     this.homes = new HomeKit(() => this.random(), this.theme, themeId);
+    this.specials = new SpecialKit(() => this.random(), this.theme, themeId);
     this.life = new CityLife(this.root, {
       random: () => this.random(),
       cellAt: (x, z) => {
@@ -136,6 +172,7 @@ export class ChatCity {
       },
       cityRadius: () => this.activeRadius
     }, this.theme, themeId);
+    if (options.transparent) this.life.limits = { people: 30, cars: 14 };
     // Isometric pixel art to match the HUD: render at low resolution, outline edges, upscale crisp.
     this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 1.5));
     const pixelArt = this.pixelSize > 1;
@@ -145,6 +182,7 @@ export class ChatCity {
     this.renderer = new WebGLRenderer({ antialias: !pixelArt, alpha: true, premultipliedAlpha: true });
     this.renderer.setPixelRatio(dpr);
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.type = pixelArt ? BasicShadowMap : PCFShadowMap; // hard-edged pixel shadows
     if (pixelArt) {
       this.composer = new EffectComposer(this.renderer);
@@ -173,6 +211,7 @@ export class ChatCity {
     for (const light of this.lightPool) this.root.add(light);
     this.addLighting();
     this.makeGround();
+    this.root.add(this.ground);
     this.makeTiles();
     this.setActiveRadius(this.activeRadius);
     this.seedFoundingCamp();
@@ -218,12 +257,9 @@ export class ChatCity {
         const colorSet = this.theme.grass;
         const terrainHash = Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453);
         const tileColor = colorSet[Math.floor((terrainHash % 1) * colorSet.length)];
-        const slab = new Mesh(new BoxGeometry(0.99, road ? 0.075 : 0.12, 0.99), mat(tileColor));
-        slab.position.y = road ? -0.04 : -0.06;
-        slab.receiveShadow = true;
-        group.add(slab);
+        this.ground.setColorAt(this.tiles.length, new Color(tileColor));
         this.root.add(group);
-        const tile: Tile = { x, z, kind: "empty", road, group, trees: [] };
+        const tile: Tile = { x, z, kind: "empty", road, group, trees: [], index: this.tiles.length };
         this.tiles.push(tile);
         this.tileByCoord.set(this.key(x, z), tile);
       }
@@ -253,8 +289,10 @@ export class ChatCity {
       crown.castShadow = true;
       tree.add(crown);
     }
+    bakeStatic(tree, 2);
     tile.group.add(tree);
     tile.trees.push(tree);
+    this.shadowsDirty = true;
   }
 
   private frameCamera() {
@@ -315,7 +353,9 @@ export class ChatCity {
         tile.revealing = true;
         tile.revealElapsed = 0;
       } else if (!shouldBeVisible) tile.group.visible = false;
+      this.writeGround(tile);
     }
+    this.shadowsDirty = true;
     if (this.plotBorder) {
       this.root.remove(this.plotBorder);
       this.plotBorder.geometry.dispose();
@@ -383,7 +423,8 @@ export class ChatCity {
       for (const tree of clearing.trees) clearing.group.remove(tree);
       clearing.trees = [];
     }
-    this.life.seedGathering(tile.group.position.clone(), 4);
+    // The story starts with a single villager tending the fire; others arrive as huts go up.
+    this.life.seedGathering(tile.group.position.clone(), 1);
   }
 
   private expandPlot() {
@@ -475,6 +516,7 @@ export class ChatCity {
   /** Rebuild street meshes and the traffic graph from the current path tiles. */
   private rebuildStreets() {
     this.streetsDirty = false;
+    this.shadowsDirty = true;
     this.streetEra = this.technologyEra;
     const cells = new Map<string, NetCell>();
     const doors: Door[] = [];
@@ -531,17 +573,21 @@ export class ChatCity {
     pasture.trees = [];
     this.actorTiles.add(this.key(pasture.x, pasture.z));
     // A little paddock fence so the flock has a home.
+    const paddock = new Group();
     const fence = mat(0x8a6d4e, 1);
     for (const [dx, dz, w, d] of [[0, 0.45, 0.94, 0.03], [0, -0.45, 0.94, 0.03], [0.45, 0, 0.03, 0.94], [-0.45, 0, 0.03, 0.94]] as const) {
       const rail = new Mesh(new BoxGeometry(w, 0.03, d), fence);
       rail.position.set(dx, 0.09, dz);
-      pasture.group.add(rail);
+      paddock.add(rail);
     }
     for (const sx of [-0.45, 0, 0.45]) for (const sz of [-0.45, 0.45]) {
       const post = new Mesh(new BoxGeometry(0.035, 0.13, 0.035), fence);
-      post.position.set(sx, 0.065, sz); pasture.group.add(post);
-      const side = post.clone(); side.position.set(sz, 0.065, sx); pasture.group.add(side);
+      post.position.set(sx, 0.065, sz); paddock.add(post);
+      const side = post.clone(); side.position.set(sz, 0.065, sx); paddock.add(side);
     }
+    bakeStatic(paddock, 2);
+    pasture.group.add(paddock);
+    this.shadowsDirty = true;
     this.pastures++;
     const center = pasture.group.position.clone();
     this.life.addSheep(center);
@@ -901,6 +947,100 @@ export class ChatCity {
     return true;
   }
 
+  private makeSpecial(tile: Tile, immediate = false): boolean {
+    const building = new Group();
+    const parts = this.specials.build(building, this.eraIndex);
+    if (!this.connectNewBuilding(tile, building)) return false;
+    tile.group.add(building);
+    tile.building = building;
+    tile.kind = "landmark";
+    building.userData.special = true;
+    for (const part of parts) this.animated.push({ tile, building, part });
+    this.animateBuild(building, tile, immediate);
+    return true;
+  }
+
+  private updateAnimated(delta: number) {
+    const clock = this.actorClock;
+    this.animated = this.animated.filter(entry => entry.tile.building === entry.building);
+    for (const { building, part } of this.animated) {
+      if (part.kind === "spin") part.object.rotation[part.axis] += part.speed * delta;
+      else if (part.kind === "blink") part.object.visible = ((clock / part.period + part.offset) % 1) < 0.55;
+      else if (part.kind === "sway") part.object.rotation.z = Math.sin(clock * part.speed + part.amount * 10) * part.amount;
+      else if (this.random() < part.rate * delta && this.particles.length < 520) {
+        const at = building.localToWorld(new Vector3(part.at.x, part.at.y, part.at.z));
+        this.puff(at, part.color, 0.045 + this.random() * 0.03, 1.8 + this.random(), new Vector3((this.random() - 0.5) * 0.12, 0.32 + this.random() * 0.2, (this.random() - 0.5) * 0.12), -0.12, true);
+      }
+    }
+  }
+
+  private trafficPhase = -1;
+  /** Intersection lights cycle green, yellow, red; streets on alternating diagonals are out of step. */
+  private updateTrafficLights() {
+    const bulbs = this.streetLayer?.userData.trafficBulbs as InstancedMesh | undefined;
+    if (!bulbs) return;
+    const step = Math.floor(this.actorClock * 2); // re-colour twice a second at most
+    if (step === this.trafficPhase) return;
+    this.trafficPhase = step;
+    const phases = bulbs.userData.phases as number[];
+    const colour = new Color();
+    phases.forEach((offset, index) => {
+      const t = (this.actorClock / 8 + offset) % 1;
+      colour.setHex(t < 0.42 ? 0x3cff6a : t < 0.5 ? 0xffd23c : 0xff3c3c);
+      bulbs.setColorAt(index, colour);
+    });
+    if (bulbs.instanceColor) bulbs.instanceColor.needsUpdate = true;
+  }
+
+  /** A small flock crosses the sky now and then. */
+  private launchBirds() {
+    const flock = new Group();
+    const wingMat = mat(0x1d1f24, 1);
+    const wings: Mesh[] = [];
+    for (let i = 0; i < 6; i++) {
+      const bird = new Group();
+      bird.position.set((i % 3) * 0.45 - 0.45, (i % 2) * 0.2, Math.floor(i / 2) * 0.35);
+      for (const side of [-1, 1]) {
+        const wing = new Mesh(new BoxGeometry(0.16, 0.012, 0.06), wingMat);
+        wing.position.x = side * 0.08;
+        wing.userData.side = side;
+        bird.add(wing);
+        wings.push(wing);
+      }
+      flock.add(bird);
+    }
+    const span = this.activeRadius + 6;
+    const fromLeft = this.random() < 0.5;
+    const start = new Vector3(fromLeft ? -span : span, 4 + this.random() * 1.5, (this.random() - 0.5) * span);
+    const end = new Vector3(-start.x, start.y + 0.5, -start.z * 0.5);
+    flock.lookAt(end);
+    this.root.add(flock);
+    let t = 0;
+    this.effects.push(delta => {
+      t += delta / 9;
+      flock.position.lerpVectors(start, end, t);
+      for (const wing of wings) wing.rotation.z = Math.sin(this.actorClock * 14 + wing.parent!.position.x * 5) * 0.6 * wing.userData.side;
+      if (t < 1) return false;
+      this.root.remove(flock);
+      disposeObject(flock);
+      return true;
+    });
+  }
+
+  /** Era milestones get a proper party: volleys of fireworks while everyone cheers. */
+  private celebrate() {
+    this.life.cheer(6);
+    let t = 0, shots = 0;
+    this.effects.push(delta => {
+      t += delta;
+      if (t > shots * 0.45 && shots < 6) {
+        shots++;
+        this.fireworks((this.random() - 0.5) * this.activeRadius, (this.random() - 0.5) * this.activeRadius, 1.6);
+      }
+      return shots >= 6;
+    });
+  }
+
   private makeSkyscraper(tile: Tile, immediate = false): boolean {
     const building = new Group();
     const glass = mat(this.theme.house[1], 0.32, { metalness: 0.22 });
@@ -1031,7 +1171,20 @@ export class ChatCity {
   }
 
   private animateBuild(building: Group, tile: Tile, immediate = false) {
+    // Chimneys recorded by the home kit: about half of them smoke.
+    for (const at of (building.userData.smoke as Array<{ x: number; y: number; z: number }> | undefined) ?? []) {
+      if (this.random() < 0.5) this.animated.push({ tile, building, part: { kind: "smoke", at: new Vector3(at.x, at.y, at.z), rate: 1.1, color: 0x8a8a8a } });
+    }
     bakeStatic(building);
+    if (!immediate) {
+      // Construction dust ring plus a few gold sparkles.
+      const base = tile.group.position;
+      for (let i = 0; i < 14; i++) {
+        const angle = (i / 14) * Math.PI * 2;
+        this.puff(base.clone().add(new Vector3(Math.cos(angle) * 0.42, 0.05, Math.sin(angle) * 0.42)), 0xb8a888, 0.05, 0.7, new Vector3(Math.cos(angle) * 0.9, 0.4, Math.sin(angle) * 0.9), 1.2, true);
+      }
+      for (let i = 0; i < 6; i++) this.puff(base.clone().add(new Vector3((this.random() - 0.5) * 0.5, 0.6 + this.random() * 0.6, (this.random() - 0.5) * 0.5)), 0xffe08a, 0.035, 0.9, new Vector3(0, 0.7, 0), 0.4);
+    }
     building.userData.buildElapsed = immediate ? 1 : 0;
     building.userData.tile = tile;
     building.userData.era = this.eraIndex;
@@ -1154,7 +1307,11 @@ export class ChatCity {
       if (!tile) return;
       for (const tree of tile.trees) tile.group.remove(tree);
       tile.trees = [];
-      const built = kind === "house" ? this.makeHouse(tile, immediate) : this.makeLandmark(tile, immediate);
+      // Every few homes the district gets a civic building: a well, windmill, factory, arcade...
+      this.buildsSinceSpecial++;
+      const special = kind === "house" && this.buildsSinceSpecial >= 4 && this.random() < 0.45;
+      const built = special ? this.makeSpecial(tile, immediate) : kind === "house" ? this.makeHouse(tile, immediate) : this.makeLandmark(tile, immediate);
+      if (built && special) this.buildsSinceSpecial = 0;
       if (!built) continue;
       this.focus.copy(tile.group.position);
       this.totalBuildings++;
@@ -1401,7 +1558,7 @@ export class ChatCity {
 
 
   apply(event: SimEvent, historical = false) {
-    if (event.type === "advancement") this.unlockTechnology(event.era);
+    if (event.type === "advancement") { this.unlockTechnology(event.era); if (!historical) this.celebrate(); }
     else if (event.type === "build") this.build(event.kind, event.count, historical);
     else if (event.type === "boom") this.boom(event.viewers, historical);
     else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs, event.kind);
@@ -1417,6 +1574,8 @@ export class ChatCity {
         tile.group.scale.y = 0.015 + smooth * 0.985;
         tile.group.position.y = -0.07 * (1 - smooth);
         if (reveal >= 1) tile.revealing = false;
+        this.writeGround(tile);
+        this.shadowsDirty = true;
       }
       const building = tile.building;
       if (!building) continue;
@@ -1432,6 +1591,7 @@ export class ChatCity {
           building.position.x = (this.random() - 0.5) * 0.05;
         }
         building.scale.y = Math.max(0.04, 1 - step / steps);
+        this.shadowsDirty = true;
         if (step >= steps) this.destroyBuilding(tile);
         continue;
       }
@@ -1439,6 +1599,7 @@ export class ChatCity {
       building.userData.buildElapsed = elapsed;
       const progress = Math.min(1, elapsed / 0.82);
       if (progress < 1 || !building.userData.settled) {
+        this.shadowsDirty = true;
         // Builds stack up in the same chunky steps as demolition, then land with a little bounce.
         const eased = 1 - Math.pow(1 - progress, 2);
         const stepped = Math.max(1, Math.ceil(eased * ChatCity.BUILD_STEPS)) / ChatCity.BUILD_STEPS;
@@ -1477,6 +1638,7 @@ export class ChatCity {
       disposeObject(tile.building);
       tile.building = undefined;
       this.streetsDirty = true;
+      this.shadowsDirty = true;
     }
     tile.kind = "empty";
     tile.burningUntil = undefined;
@@ -1512,12 +1674,20 @@ export class ChatCity {
   private animate = () => {
     if (this.destroyed) return;
     const now = performance.now();
-    const delta = Math.min((now - this.previousFrame) / 1000, 0.05);
+    // Overlays cap the frame rate: a 30 fps city is plenty over a 30/60 fps stream and halves GPU work.
+    this.frameBudget += now - this.previousFrame;
+    if (this.maxFps < 60 && this.frameBudget < 1000 / this.maxFps - 2) { this.previousFrame = now; return; }
+    const delta = Math.min(this.frameBudget / 1000, 0.07);
+    this.frameBudget = 0;
     this.previousFrame = now;
     const oldSpan = this.viewSpan;
     this.viewSpan += (this.targetSpan - this.viewSpan) * (1 - Math.exp(-3.6 * delta));
     if (Math.abs(oldSpan - this.viewSpan) > 0.001) this.updateCameraFrustum();
     this.updateBuildings(delta);
+    this.updateAnimated(delta);
+    this.updateTrafficLights();
+    this.birdClock -= delta;
+    if (this.birdClock <= 0) { this.birdClock = 25 + this.random() * 30; this.launchBirds(); }
     if (this.streetsDirty) this.rebuildStreets();
     this.updateCampfire(delta);
     this.life.update(delta);
@@ -1529,9 +1699,32 @@ export class ChatCity {
     this.updateParticles(delta);
     this.shake = Math.max(0, this.shake - delta * 1.4);
     const jolt = this.shake * this.shake * 0.5;
-    this.camera.position.set(this.cameraBase.x + (Math.random() - 0.5) * jolt, this.cameraBase.y + (Math.random() - 0.5) * jolt, this.cameraBase.z + (Math.random() - 0.5) * jolt);
+    this.viewAngle += (this.targetViewAngle - this.viewAngle) * (1 - Math.exp(-7 * delta));
+    if (Math.abs(this.targetViewAngle - this.viewAngle) < 0.0005) this.viewAngle = this.targetViewAngle;
+    const cos = Math.cos(this.viewAngle), sin = Math.sin(this.viewAngle);
+    const baseX = this.cameraBase.x * cos - this.cameraBase.z * sin, baseZ = this.cameraBase.x * sin + this.cameraBase.z * cos;
+    this.camera.position.set(baseX + (Math.random() - 0.5) * jolt, this.cameraBase.y + (Math.random() - 0.5) * jolt, baseZ + (Math.random() - 0.5) * jolt);
+    this.camera.lookAt(0, 0, 0);
+    if (this.groundDirty) {
+      this.ground.instanceMatrix.needsUpdate = true;
+      if (this.ground.instanceColor) this.ground.instanceColor.needsUpdate = true;
+      this.groundDirty = false;
+    }
+    if (this.shadowsDirty) { this.renderer.shadowMap.needsUpdate = true; this.shadowsDirty = false; }
     if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
   };
+
+  speakerPoint() {
+    const at = this.life.speakerPosition();
+    return at ? this.screenPoint(at.setY(at.y - 0.8)) : undefined;
+  }
+
+  /** Turn the view a quarter turn (+1 clockwise, -1 counter-clockwise). */
+  rotateView(steps: number) {
+    this.viewQuarter = ((this.viewQuarter + steps) % 4 + 4) % 4;
+    this.targetViewAngle += steps * Math.PI / 2;
+  }
+  get viewDirection() { return this.viewQuarter; }
 
   /** Project a world point to CSS pixels inside the host element. */
   screenPoint(world: Vector3) {

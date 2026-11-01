@@ -11,6 +11,13 @@ const ATTACK_REASON: Record<string, string> = {
   hate: "HATE", toxic: "TOXIC CHAT", shouting: "ALL CAPS STORM", spam: "SPAM SWARM", copypasta: "COPYPASTA SWARM", flood: "CHAT FLOOD", lowEffort: "LOW EFFORT"
 };
 
+export interface MapperState {
+  houseProgress: number; landmarkProgress: number; technologyProgress: number; technologyEra: number;
+  recoveryActive: boolean; recoveryEra: number; recoveryProgress: number; recoveryGoal: number;
+  scoreTotal: number; threat: number; snapshot: ScoreSnapshot;
+  leaderboard?: Array<[string, number]>;
+}
+
 export class EventMapper {
   private readonly sessionStartedAt = Date.now();
   private houseProgress = 0;
@@ -29,11 +36,34 @@ export class EventMapper {
   private recentMessages = 0;
   private recentMinusMessages = 0;
   private peakThreatRatio = 0;
+  /** Points per chatter since the last build (credited on it) and across the whole session. */
+  private contributors = new Map<string, number>();
+  private leaderboard = new Map<string, number>();
   private lastTickAt = Date.now();
   private negativeMix: Record<string, number> = {};
   private snapshot: ScoreSnapshot = { total: 0, gained: 0, lost: 0, threat: 0, threatRatio: 0, pops: [] };
 
   get score(): ScoreSnapshot { return this.snapshot; }
+
+  /** Serializable progress so a city can be saved and resumed (used by the browser extension). */
+  exportState(): MapperState {
+    return {
+      houseProgress: this.houseProgress, landmarkProgress: this.landmarkProgress,
+      technologyProgress: this.technologyProgress, technologyEra: this.technologyEra,
+      recoveryActive: this.recoveryActive, recoveryEra: this.recoveryEra,
+      recoveryProgress: this.recoveryProgress, recoveryGoal: this.recoveryGoal,
+      scoreTotal: this.scoreTotal, threat: this.threat, snapshot: { ...this.snapshot, highlight: undefined },
+      leaderboard: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 50)
+    };
+  }
+
+  importState(state: Partial<MapperState>) {
+    const numbers = ["houseProgress", "landmarkProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat"] as const;
+    for (const key of numbers) if (typeof state[key] === "number" && Number.isFinite(state[key])) this[key] = state[key] as number;
+    if (typeof state.recoveryActive === "boolean") this.recoveryActive = state.recoveryActive;
+    if (state.snapshot) this.snapshot = { ...state.snapshot, pops: [] };
+    if (Array.isArray(state.leaderboard)) this.leaderboard = new Map(state.leaderboard.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
+  }
 
   get progress(): CommunityProgress {
     const milestones = config.technology.milestones;
@@ -101,6 +131,14 @@ export class EventMapper {
     // Minuses slow technology down, but never undo a milestone that was already reached.
     const eraFloor = this.technologyEra > 0 ? config.technology.milestones[this.technologyEra - 1].points : 0;
     this.technologyProgress = Math.max(eraFloor, this.technologyProgress + signals.minusPoints * config.threat.technologyPenalty);
+    for (const [user, points] of Object.entries(signals.byUser)) {
+      this.contributors.set(user, (this.contributors.get(user) ?? 0) + points);
+      this.leaderboard.set(user, (this.leaderboard.get(user) ?? 0) + points);
+    }
+    if (this.leaderboard.size > 600) {
+      const kept = [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 300);
+      this.leaderboard = new Map(kept);
+    }
     this.updateScore(signals, seconds);
 
     while (this.technologyEra < config.technology.milestones.length
@@ -115,12 +153,12 @@ export class EventMapper {
         const count = Math.min(growth.maxBuildsPerPulse, Math.floor(this.landmarkProgress / growth.landmarkThreshold));
         this.landmarkProgress -= count * growth.landmarkThreshold;
         this.lastBuildAt = now;
-        events.push({ type: "build", kind: "landmark", count });
+        events.push({ type: "build", kind: "landmark", count, builders: this.takeBuilders() });
       } else if (this.houseProgress >= growth.progressThreshold) {
         const count = Math.min(growth.maxBuildsPerPulse, Math.floor(this.houseProgress / growth.progressThreshold));
         this.houseProgress -= count * growth.progressThreshold;
         this.lastBuildAt = now;
-        events.push({ type: "build", kind: "house", count });
+        events.push({ type: "build", kind: "house", count, builders: this.takeBuilders() });
       }
     }
 
@@ -147,6 +185,13 @@ export class EventMapper {
     const attack = this.maybeAttack(now);
     if (attack) events.push(attack);
     return events;
+  }
+
+  /** The top contributors since the last build get the credit for it. */
+  private takeBuilders() {
+    const names = [...this.contributors].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name]) => name);
+    this.contributors.clear();
+    return names.length ? names : undefined;
   }
 
   private updateScore(signals: GrowthSignals, seconds: number) {
@@ -183,7 +228,9 @@ export class EventMapper {
       lost: Math.round(signals.minusPoints * 10) / 10,
       threat: Math.round(this.threat * 10) / 10,
       threatRatio: Math.min(1, this.threat / threat.destroyThreshold),
-      pops
+      pops,
+      topBuilders: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, points]) => ({ name, points: Math.round(points) })),
+      highlight: signals.highlight ? { user: signals.highlight.user, text: signals.highlight.text } : undefined
     };
   }
 

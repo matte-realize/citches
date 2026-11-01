@@ -117,38 +117,69 @@ export function tint(color: number, random: () => number, hue = 0.02, light = 0.
   return result.getHex();
 }
 
+const vertexColorMaterials = new Map<number, MeshStandardMaterial>();
+/** Shared vertex-coloured material per roughness band, so differently coloured parts can merge. */
+function vertexColorMaterial(roughness: number) {
+  const band = Math.round(roughness * 4) / 4;
+  let material = vertexColorMaterials.get(band);
+  if (!material) {
+    material = new MeshStandardMaterial({ vertexColors: true, roughness: band });
+    material.userData.shared = true;
+    vertexColorMaterials.set(band, material);
+  }
+  return material;
+}
+
+/** Plain opaque colours can be baked into vertex colours; glowing, metallic or see-through ones keep their material. */
+function bakeKey(material: Material) {
+  if (!(material instanceof MeshStandardMaterial) || material.transparent || material.vertexColors || material.map) return material.uuid;
+  const glows = material.emissiveIntensity > 0 && (material.emissive.r + material.emissive.g + material.emissive.b) > 0;
+  if (glows || material.metalness > 0.2) return material.uuid;
+  return `vc|${Math.round(material.roughness * 4) / 4}`;
+}
+
 /**
- * Merge a finished building's static meshes into one mesh per material. Buildings are built from
- * dozens of small parts; baking them cuts draw calls (and shadow passes) by an order of magnitude.
- * Objects flagged `userData.keep` (animated flames, hearths) are left untouched.
+ * Merge a finished object's static meshes. Plain-coloured parts become vertex colours on one shared
+ * material, so a building made of 60 parts usually draws in two or three calls (and the same in
+ * the shadow pass). Objects flagged `userData.keep` (moving parts, flames) are left untouched.
  */
-export function bakeStatic(root: Object3D) {
+export function bakeStatic(root: Object3D, minMeshes = 4) {
   root.updateMatrixWorld(true);
   const inverse = new Matrix4().copy(root.matrixWorld).invert();
   const groups = new Map<string, { material: Material; geometries: Geometry[]; shadow: boolean }>();
   const remove: Mesh[] = [];
   const visit = (object: Object3D) => {
-    if (object.userData.keep) return;
+    if (object !== root && object.userData.keep) return;
     if (object instanceof Mesh && !(object instanceof InstancedMesh) && !Array.isArray(object.material)) {
+      const material = object.material as Material;
+      const key = bakeKey(material);
       const source = object.geometry as Geometry;
       const geometry: Geometry = source.index ? source.toNonIndexed() : source.clone();
       for (const name of Object.keys(geometry.attributes)) if (name !== "position" && name !== "normal") geometry.deleteAttribute(name);
       if (!geometry.attributes.normal) geometry.computeVertexNormals();
       geometry.applyMatrix4(new Matrix4().multiplyMatrices(inverse, object.matrixWorld));
-      const key = object.material.uuid;
-      const entry = groups.get(key) ?? { material: object.material as Material, geometries: [] as Geometry[], shadow: false };
+      if (key.startsWith("vc|")) {
+        const color = (material as MeshStandardMaterial).color;
+        const count = geometry.attributes.position.count;
+        const colors = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) { colors[i * 3] = color.r; colors[i * 3 + 1] = color.g; colors[i * 3 + 2] = color.b; }
+        geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
+      }
+      const entry = groups.get(key) ?? { material: key.startsWith("vc|") ? vertexColorMaterial((material as MeshStandardMaterial).roughness) : material, geometries: [] as Geometry[], shadow: false };
       entry.geometries.push(geometry);
       entry.shadow ||= object.castShadow;
       groups.set(key, entry);
       remove.push(object);
     }
-    for (const child of object.children) visit(child);
+    for (const child of [...object.children]) visit(child);
   };
   visit(root);
-  if (remove.length < 4) { for (const entry of groups.values()) entry.geometries.forEach(g => g.dispose()); return; }
+  if (remove.length < minMeshes) { for (const entry of groups.values()) entry.geometries.forEach(g => g.dispose()); return; }
   for (const mesh of remove) {
     mesh.removeFromParent();
     if (!mesh.geometry.userData.shared) mesh.geometry.dispose();
+    const material = mesh.material as Material;
+    if (!material.userData.shared && bakeKey(material).startsWith("vc|")) material.dispose();
   }
   for (const { material, geometries, shadow } of groups.values()) {
     const merged = mergeGeometries(geometries, false);
@@ -159,7 +190,6 @@ export function bakeStatic(root: Object3D) {
     mesh.receiveShadow = true;
     root.add(mesh);
   }
-  // Empty helper groups left behind are harmless; drop them to keep traversal cheap.
   const empty: Object3D[] = [];
   root.traverse(object => { if (object !== root && object.type === "Group" && object.children.length === 0 && !object.userData.keep) empty.push(object); });
   empty.forEach(object => object.removeFromParent());

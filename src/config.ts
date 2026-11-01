@@ -58,7 +58,7 @@ export const config = {
     progressThreshold: 1.4, landmarkThreshold: 2.1,
     basePoints: 0.08, complexityMultiplier: 0.24, positivityMultiplier: 0.32,
     longevityMultiplier: 0.45, longevityMinutes: 30,
-    buildCooldownMs: 2200, maxBuildsPerPulse: 3
+    buildCooldownMs: 1400, maxBuildsPerPulse: 3
   },
   technology: {
     milestones: [

@@ -1,4 +1,4 @@
-import { Group } from "three";
+import { Color, Group, InstancedMesh, MeshBasicMaterial, Object3D } from "three";
 import { Batcher, coneGeo, cylinderGeo, sharedMat, sphereGeo } from "./kit.js";
 import type { CityTheme } from "./theme.js";
 
@@ -31,6 +31,7 @@ export function streetSurface(cell: StreetCell | undefined, era: number, localX:
 export function buildStreetLayer(cells: StreetCell[], era: number, theme: CityTheme): Group {
   const group = new Group();
   const batch = new Batcher();
+  const trafficSpots: Array<{ x: number; z: number; phase: number }> = [];
   // Pieces along direction d: centre offset `from..to` along the direction with a given width.
   const arm = (material: ReturnType<typeof sharedMat>, cell: StreetCell, d: number, from: number, to: number, width: number, y: number, h: number) => {
     const [dx, dz] = DIRS[d];
@@ -71,6 +72,16 @@ export function buildStreetLayer(cells: StreetCell[], era: number, theme: CityTh
         const hx = ((cell.hash >> i) % 7) / 7 - 0.43;
         const hz = ((cell.hash >> (i + 3)) % 7) / 7 - 0.43;
         batch.box(cobble, 0.07, 0.004, 0.05, cell.px + hx * 0.36, 0.024, cell.pz + hz * 0.36);
+      }
+      // Town-era street life: barrels, crates and notice boards on the verges.
+      const devX = cell.px + (cell.hash % 2 ? 1 : -1) * 0.4, devZ = cell.pz - ((cell.hash >> 1) % 2 ? 1 : -1) * 0.4;
+      if (cell.hash % 5 === 3) {
+        batch.add(cylinderGeo(0.035, 0.035, 0.08, 8), sharedMat(0x7a5a3a, 1), devX, 0.04, devZ, 1, 1, 1, 0, true);
+        batch.box(sharedMat(0x8a6a43, 1), 0.07, 0.07, 0.07, devX + 0.07, 0.035, devZ, 0.4, true);
+      } else if (cell.hash % 7 === 5) {
+        batch.box(sharedMat(0x5a3f2a, 1), 0.02, 0.2, 0.02, devX - 0.05, 0.1, devZ, 0, true);
+        batch.box(sharedMat(0x5a3f2a, 1), 0.02, 0.2, 0.02, devX + 0.05, 0.1, devZ, 0, true);
+        batch.box(sharedMat(0xd8c69c, 1), 0.13, 0.09, 0.012, devX, 0.17, devZ, 0, true);
       }
       if (era === 3 && cell.hash % 4 === 0) {
         const corner = [0.36, -0.36][cell.hash % 2];
@@ -132,8 +143,58 @@ export function buildStreetLayer(cells: StreetCell[], era: number, theme: CityTh
         const x = cell.px + cornerX * 0.4, z = cell.pz - cornerZ * 0.4;
         batch.add(coneGeo(0.03, 0.08, 6), sharedMat(0xe3743a, 0.7), x, SIDEWALK_Y + 0.04, z);
       }
+      // Street devices on the two remaining corners.
+      const dx = cell.px + cornerX * 0.4, dz = cell.pz - cornerZ * 0.4;
+      const ex = cell.px - cornerX * 0.4, ez = cell.pz + cornerZ * 0.4;
+      const y = SIDEWALK_Y;
+      const device = (cell.hash >> 2) % 9;
+      if (device === 0) { // phone booth
+        batch.box(sharedMat(0xc0392b, 0.6), 0.08, 0.2, 0.08, dx, y + 0.1, dz, 0, true);
+        batch.box(sharedMat(0xfff0c2, 0.3, { emissive: 0xffd98a, emissiveIntensity: 0.9 }), 0.082, 0.1, 0.082, dx, y + 0.12, dz);
+      } else if (device === 1) { // vending machine
+        batch.box(sharedMat(0x2e6da4, 0.5), 0.08, 0.16, 0.06, dx, y + 0.08, dz, 0, true);
+        batch.box(sharedMat(0xe8f4ff, 0.3, { emissive: 0x9fd4ff, emissiveIntensity: 1.1 }), 0.06, 0.08, 0.062, dx, y + 0.1, dz);
+      } else if (device === 2) { // mailbox
+        batch.box(sharedMat(0x2f5fa8, 0.6), 0.05, 0.07, 0.04, dx, y + 0.075, dz, 0, true);
+        batch.box(sharedMat(0x30353a, 0.6), 0.012, 0.04, 0.012, dx, y + 0.02, dz);
+      } else if (device === 3) { // fire hydrant
+        batch.add(cylinderGeo(0.018, 0.022, 0.06, 6), sharedMat(0xd9342b, 0.6), dx, y + 0.03, dz, 1, 1, 1, 0, true);
+        batch.add(sphereGeo(0.02, 6, 4), sharedMat(0xd9342b, 0.6), dx, y + 0.065, dz);
+      } else if (device === 4) { // bus stop shelter
+        batch.box(sharedMat(0xcfe8ee, 0.2, { emissive: 0x6fa8c0, emissiveIntensity: 0.35 }), 0.16, 0.12, 0.008, dx, y + 0.06, dz - 0.035);
+        batch.box(sharedMat(0x30353a, 0.5), 0.18, 0.012, 0.08, dx, y + 0.125, dz, 0, true);
+        batch.box(sharedMat(0x8a6a43, 0.9), 0.12, 0.012, 0.03, dx, y + 0.035, dz - 0.015);
+      } else if (device === 5 || device === 6) { // bench
+        batch.box(sharedMat(0x8a6a43, 0.9), 0.12, 0.012, 0.04, ex, y + 0.035, ez, 0, true);
+        batch.box(sharedMat(0x8a6a43, 0.9), 0.12, 0.03, 0.008, ex, y + 0.055, ez - 0.02);
+      } else if (device === 7 && era >= 5) { // EV charger
+        batch.box(sharedMat(0xe9e6dc, 0.5), 0.04, 0.12, 0.03, dx, y + 0.06, dz, 0, true);
+        batch.box(sharedMat(0x7cf29a, 0.3, { emissive: 0x2fd06a, emissiveIntensity: 1.4 }), 0.03, 0.02, 0.032, dx, y + 0.1, dz);
+      }
+      if (linkCount >= 3) trafficSpots.push({ x: cell.px + cornerX * 0.31, z: cell.pz - cornerZ * 0.31, phase: Math.abs(Math.round(cell.px + cell.pz)) % 2 ? 0 : 0.5 });
     }
   }
   batch.flush(group);
+  // Traffic lights: poles are static, the bulbs are one instanced mesh whose colours cycle.
+  const spots = trafficSpots;
+  if (spots.length) {
+    const poles = new Batcher();
+    for (const spot of spots) {
+      poles.add(cylinderGeo(0.01, 0.012, 0.3, 5), sharedMat(0x30353a, 0.5, { metalness: 0.4 }), spot.x, SIDEWALK_Y + 0.15, spot.z, 1, 1, 1, 0, true);
+      poles.box(sharedMat(0x1d2024, 0.6), 0.04, 0.09, 0.04, spot.x, SIDEWALK_Y + 0.33, spot.z);
+    }
+    poles.flush(group);
+    const bulbs = new InstancedMesh(sphereGeo(0.018, 6, 4), new MeshBasicMaterial({ toneMapped: false }), spots.length);
+    const dummy = new Object3D();
+    spots.forEach((spot, index) => {
+      dummy.position.set(spot.x, SIDEWALK_Y + 0.33, spot.z);
+      dummy.updateMatrix();
+      bulbs.setMatrixAt(index, dummy.matrix);
+      bulbs.setColorAt(index, new Color(0x3cff6a));
+    });
+    bulbs.userData.phases = spots.map(spot => spot.phase);
+    group.add(bulbs);
+    group.userData.trafficBulbs = bulbs;
+  }
   return group;
 }

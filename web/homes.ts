@@ -2,6 +2,7 @@ import { Group } from "three";
 import type { Material } from "three";
 import { Batcher, block, coneGeo, cylinderGeo, place, prismGeo, pyramidGeo, sharedMat, sphereGeo, tint } from "./kit.js";
 import type { CityTheme, CityThemeId } from "./theme.js";
+import { addGadgets } from "./specials.js";
 
 type Random = () => number;
 export type HomeStyle =
@@ -37,7 +38,10 @@ export class HomeKit {
     return style;
   }
 
+  private era = 0;
+
   build(building: Group, era: number, style = this.chooseStyle(era)) {
+    this.era = era;
     const windows = new Batcher();
     const ctx = { building, era, windows };
     switch (style) {
@@ -125,13 +129,56 @@ export class HomeKit {
           if (opts.skipFrontGround && floor === 0 && face === 0 && Math.abs(t) < 0.12) continue;
           const material = this.windowMat();
           const out = 0.008;
-          if (face === 0) batch.box(material, 0.1, winH, 0.02, cx + t, y, cz + d / 2 + out);
-          else if (face === 2) batch.box(material, 0.1, winH, 0.02, cx + t, y, cz - d / 2 - out);
-          else if (face === 1) batch.box(material, 0.02, winH, 0.1, cx + w / 2 + out, y, cz + t);
-          else batch.box(material, 0.02, winH, 0.1, cx - w / 2 - out, y, cz + t);
+          // Dark frame behind the pane and a pale sill underneath give each window some depth.
+          const frame = sharedMat(0x2a2620, 0.8), sill = sharedMat(0xe8e0cc, 0.8);
+          if (face === 0) {
+            batch.box(frame, 0.122, winH + 0.022, 0.016, cx + t, y, cz + d / 2 + 0.004);
+            batch.box(material, 0.1, winH, 0.02, cx + t, y, cz + d / 2 + out);
+            batch.box(sill, 0.13, 0.018, 0.04, cx + t, y - winH / 2 - 0.012, cz + d / 2 + 0.016);
+          } else if (face === 2) {
+            batch.box(frame, 0.122, winH + 0.022, 0.016, cx + t, y, cz - d / 2 - 0.004);
+            batch.box(material, 0.1, winH, 0.02, cx + t, y, cz - d / 2 - out);
+          } else if (face === 1) {
+            batch.box(frame, 0.016, winH + 0.022, 0.122, cx + w / 2 + 0.004, y, cz + t);
+            batch.box(material, 0.02, winH, 0.1, cx + w / 2 + out, y, cz + t);
+            batch.box(sill, 0.04, 0.018, 0.13, cx + w / 2 + 0.016, y - winH / 2 - 0.012, cz + t);
+          } else {
+            batch.box(frame, 0.016, winH + 0.022, 0.122, cx - w / 2 - 0.004, y, cz + t);
+            batch.box(material, 0.02, winH, 0.1, cx - w / 2 - out, y, cz + t);
+          }
           if (opts.shutters && face === 0) for (const s of [-1, 1]) batch.box(opts.shutters, 0.03, winH, 0.015, cx + t + s * 0.068, y, cz + d / 2 + 0.012);
         }
       }
+    }
+    // Trim bands between storeys.
+    if (floors > 1) {
+      const trim = sharedMat(tint(this.theme.stone, this.random, 0.01, 0.05), 0.8);
+      for (let floor = 1; floor < floors; floor++) {
+        const y = y0 + floor * floorH;
+        batch.box(trim, w + 0.02, 0.025, d + 0.02, cx, y, cz, 0, true);
+      }
+    }
+  }
+
+  /** Each civilization keeps its character after industrialisation. */
+  private themeTouch(parent: Group, w: number, d: number, h: number, x: number, z: number, floors: number, fh: number) {
+    if (this.themeId === "egypt") {
+      this.palm(parent, x + w * 0.3, z - d * 0.25);
+      for (const child of parent.children.slice(-10)) child.position.y += h; // lift the palm onto the roof
+      this.awning(parent, w * 0.4, d * 0.35, h, x - w * 0.15, z + d * 0.1);
+    } else if (this.themeId === "rome") {
+      this.hip(parent, w + 0.06, d + 0.06, h, 0.18, sharedMat(tint(0xb05b42, this.random), 0.85), x, z);
+      for (const sx of [-1, 1]) place(parent, cylinderGeo(0.025, 0.03, 0.34, 8), sharedMat(0xe0d3b5, 0.7), x + sx * 0.12, 0.17, z + d / 2 + 0.05);
+      block(parent, 0.32, 0.04, 0.08, x, 0.36, z + d / 2 + 0.05, sharedMat(0xe0d3b5, 0.7));
+    } else if (this.themeId === "norse") {
+      for (let i = 0; i < 5; i++) block(parent, 0.02, h * 0.98, 0.012, x - w / 2 + 0.08 + (i * (w - 0.16)) / 4, h / 2, z + d / 2 + 0.008, sharedMat(0x4f3a28, 1), 0, false);
+      this.gable(parent, w, d, h, 0.3, sharedMat(this.random() < 0.5 ? 0x3a4440 : 0x5f7a45, 0.9), this.random() < 0.5, x, z, 0.04);
+    } else {
+      const tile = sharedMat(tint(this.pick(this.theme.roof), this.random), 0.85);
+      for (let floor = 2; floor < floors; floor += 2) block(parent, w + 0.16, 0.03, d + 0.16, x, floor * fh + 0.02, z, tile);
+      block(parent, w + 0.2, 0.035, d + 0.2, x, h + 0.02, z, tile);
+      const lantern = block(parent, 0.07, 0.1, 0.07, x + w / 2 - 0.05, 0.3, z + d / 2 + 0.06, sharedMat(this.theme.accent, 0.6, { emissive: this.theme.accent, emissiveIntensity: 0.9 }));
+      lantern.castShadow = false;
     }
   }
 
@@ -181,10 +228,19 @@ export class HomeKit {
 
   private chimney(parent: Group, x: number, y: number, z: number) {
     block(parent, 0.07, 0.24, 0.07, x, y + 0.12, z, sharedMat(this.themeId === "norse" ? 0x6b665a : 0x8a5a44, 0.9));
+    block(parent, 0.09, 0.025, 0.09, x, y + 0.25, z, sharedMat(0x4a4038, 0.9));
+    // The city puffs smoke from some chimneys (local position, read after the home is built).
+    (parent.userData.smoke ??= []).push({ x, y: y + 0.28, z });
   }
 
   private entrance(parent: Group, x: number, z: number, height = 0.24, width = 0.11) {
+    block(parent, width + 0.03, height + 0.02, 0.022, x, height / 2 + 0.025, z + 0.006, sharedMat(0x3a2f26, 0.9));
     block(parent, width, height, 0.03, x, height / 2 + 0.02, z + 0.012, this.door());
+    block(parent, 0.014, 0.014, 0.01, x + width * 0.3, height * 0.5 + 0.02, z + 0.03, sharedMat(0xd9a441, 0.4, { metalness: 0.6 }), 0, false);
+    if (this.era >= 3) {
+      const lamp = block(parent, 0.03, 0.04, 0.03, x + width / 2 + 0.04, height * 0.85, z + 0.03, sharedMat(this.theme.glow, 0.3, { emissive: this.theme.glow, emissiveIntensity: 1.4 }), 0, false);
+      lamp.receiveShadow = false;
+    }
     if (this.random() < 0.5) block(parent, width + 0.06, 0.02, 0.07, x, height + 0.06, z + 0.03, this.roofMat());
     block(parent, width + 0.04, 0.025, 0.06, x, 0.012, z + 0.035, this.stone());
   }
@@ -427,6 +483,8 @@ export class HomeKit {
       place(building, cylinderGeo(0.09, 0.09, 0.14, 10), sharedMat(0x7a5a3d, 1), 0.2, h + 0.28, z - 0.12);
       place(building, coneGeo(0.1, 0.06, 10), sharedMat(0x5a4a3a, 1), 0.2, h + 0.38, z - 0.12);
     } else this.roofGarden(building, w * 0.8, d * 0.7, h + 0.09, 0, z);
+    addGadgets(building, this.random, h + 0.09, w, d, 0, z, era);
+    this.themeTouch(building, w, d, h + 0.09, 0, z, floors, fh);
   }
 
   private walkup({ building, era, windows }: Ctx) {
@@ -449,6 +507,8 @@ export class HomeKit {
       ladder.rotation.x = (f % 2 ? 1 : -1) * 0.75;
     }
     for (const cx of [-0.18, 0.08]) this.chimney(building, x + cx, h + 0.04, z - 0.2);
+    addGadgets(building, this.random, h + 0.06, w, d, x + 0.05, z + 0.05, era);
+    if (this.themeId === "japan" || this.themeId === "norse") this.themeTouch(building, w, d, h + 0.06, x, z, floors, fh);
     if (era >= 5) this.solar(building, 0.3, 0.3, h + 0.07, x + 0.1, z + 0.12);
     this.tree(building, 0.38, 0.38, 0.8);
   }
@@ -512,6 +572,7 @@ export class HomeKit {
     block(building, 0.3, 0.012, 0.16, 0.24, 0.033, 0.28, sharedMat(0x48b6d6, 0.1, { emissive: 0x1d7fa8, emissiveIntensity: 0.6 }));
     for (let i = 0; i < 4; i++) block(building, 0.09, 0.08, 0.09, -0.42 + i * 0.1, 0.04, 0.42, sharedMat(this.theme.foliage[0], 1));
     if (era >= 5) this.solar(building, 0.4, 0.3, 0.58, 0.12, -0.14);
+    else addGadgets(building, this.random, 0.58, 0.46, 0.4, 0.12, -0.14, era);
     this.tree(building, 0.4, -0.38, 0.8);
   }
 
@@ -532,6 +593,7 @@ export class HomeKit {
     for (const sx of [-1, 1]) block(building, 0.015, h, 0.015, sx * (w / 2 + 0.005), h / 2, z + d / 2 + 0.005, accent, 0, false);
     this.roofGarden(building, w * 0.9, d * 0.9, h, 0, z);
     this.entrance(building, 0, z + d / 2, 0.26, 0.18);
+    this.themeTouch(building, w * 0.9, d * 0.9, h + 0.03, 0, z, floors, fh);
   }
 
   private roofGarden(parent: Group, w: number, d: number, y: number, x: number, z: number) {

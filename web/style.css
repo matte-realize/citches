@@ -19,11 +19,17 @@ html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; backg
 .city-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; }
 
 /* Twitch overlay: no background, city tucked into a corner, nothing steals clicks from the player. */
-html.overlay, html.overlay body { background: transparent; }
+html.overlay, html.overlay body, html.overlay #app { background: transparent; }
 html.overlay body { pointer-events: none; }
 html.overlay #app { position: fixed; width: min(40vw, 70vh); height: min(34vw, 60vh); bottom: 11vh; right: 1.5vw; }
 html.overlay[data-corner="bl"] #app { right: auto; left: 1.5vw; }
 html.overlay[data-corner="center"] #app { right: 50%; transform: translateX(50%); }
+html.overlay[data-size="small"] #app { width: min(30vw, 54vh); height: min(26vw, 46vh); }
+html.overlay[data-size="large"] #app { width: min(52vw, 86vh); height: min(44vw, 74vh); }
+/* Inside the Twitch player: keep clear of the control bar along the bottom. */
+html.in-player #app { bottom: 96px; }
+html.in-player .scoreboard { bottom: 56px; }
+html.in-player .banner { bottom: calc(96px + min(34vw, 60vh) + 8px); }
 
 /* ---------- pixel panels ---------- */
 .pixel-box, .debug, .scoreboard, .status-chip {
@@ -47,6 +53,15 @@ html.overlay[data-corner="center"] #app { right: 50%; transform: translateX(50%)
 
 .status-chip { position: fixed; top: 22px; right: 22px; z-index: 3; padding: 7px 10px; font-family: var(--chunky); font-size: 8px; color: var(--muted); letter-spacing: .05em; }
 html.overlay .status-chip { display: none; }
+.view-controls { position: fixed; right: 22px; bottom: 22px; z-index: 3; display: flex; gap: 10px; }
+.view-controls button {
+  display: grid; place-items: center; width: 44px; height: 44px; font: 20px var(--pixel); color: var(--text); background: var(--panel); border: 0; cursor: pointer;
+  box-shadow: 0 -3px 0 var(--ink), 0 3px 0 var(--ink), -3px 0 0 var(--ink), 3px 0 0 var(--ink), inset 0 3px 0 var(--panel-hi), inset 0 -3px 0 #121925;
+  transition: transform .12s cubic-bezier(.3, 2, .5, 1);
+}
+.view-controls button:hover { transform: translateY(-3px); color: var(--gold); }
+.view-controls button:active { transform: translateY(2px); }
+@media (max-width: 760px) { .view-controls { bottom: auto; top: 70px; } }
 
 /* ---------- scoreboard ---------- */
 .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
@@ -97,6 +112,28 @@ html.overlay .score-total { font-size: 18px; }
 .pop-plus { color: var(--plus); text-shadow: 2px 2px 0 var(--plus-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); }
 .pop-minus { color: var(--minus); text-shadow: 2px 2px 0 var(--minus-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); animation-name: pop-sink; }
 .pop-wreck .pop-points { font-size: 18px; }
+.pop-credit { color: var(--gold); text-shadow: 2px 2px 0 var(--gold-deep), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink), 4px 4px 0 var(--ink); }
+.pop-credit .pop-label { font-size: 16px; color: var(--text); }
+
+/* Villagers repeating wholesome chat. */
+.speech {
+  position: absolute; max-width: 240px; padding: 7px 10px 8px; transform: translate(-50%, -100%);
+  background: #f4ecd8; color: var(--ink); font-size: 14px; line-height: 1.25;
+  box-shadow: 0 -3px 0 var(--ink), 0 3px 0 var(--ink), -3px 0 0 var(--ink), 3px 0 0 var(--ink), 6px 6px 0 rgba(0, 0, 0, .3);
+  animation: speech-life 4.2s cubic-bezier(.3, 1.8, .5, 1) forwards;
+}
+.speech::after { content: ""; position: absolute; left: 50%; bottom: -12px; width: 9px; height: 9px; background: #f4ecd8; box-shadow: 3px 0 0 var(--ink), -3px 0 0 var(--ink), 0 3px 0 var(--ink); transform: translateX(-50%); }
+.speech-user { display: block; margin-bottom: 2px; font-family: var(--chunky); font-size: 8px; color: #7a3fd0; }
+html.overlay .speech { max-width: 190px; font-size: 12px; }
+@keyframes speech-life { 0% { opacity: 0; transform: translate(-50%, -80%) scale(.4); } 8% { opacity: 1; transform: translate(-50%, -100%) scale(1.08); } 14% { transform: translate(-50%, -100%) scale(1); } 88% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -120%); } }
+
+.leaders-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; overflow: hidden; white-space: nowrap; }
+.leaders-caption { flex: 0 0 auto; font-family: var(--chunky); font-size: 8px; color: var(--muted); }
+.leader { display: inline-flex; gap: 5px; align-items: baseline; padding: 2px 6px; background: var(--panel-hi); box-shadow: 0 0 0 2px var(--ink); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.leader-name { overflow: hidden; text-overflow: ellipsis; max-width: 86px; }
+.leader-points { font-family: var(--chunky); font-size: 8px; color: var(--plus); }
+.leader-0 .leader-name { color: var(--gold); }
+.leader-0::before { content: "♛"; color: var(--gold); }
 .pop-wreck { animation-duration: 2.4s; }
 html.overlay .pop-points { font-size: 12px; }
 html.overlay .pop-label { font-size: 12px; }

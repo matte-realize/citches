@@ -33,7 +33,7 @@ export function normalizeTwitchMessage(
 ): ChatMessage {
   return {
     timestamp: Number(tags["tmi-sent-ts"] ?? fallbackTimestamp),
-    user: tags.username ?? tags.login ?? tags["display-name"] ?? "anonymous",
+    user: tags["display-name"] || tags.username || tags.login || "anonymous",
     text,
     emotes: normalizeEmotes(tags.emotes),
     isRaid: (overrides?.event ?? tags["msg-id"]) === "raid",

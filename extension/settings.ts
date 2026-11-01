@@ -1,0 +1,23 @@
+export interface ChatCitySettings { enabled: boolean; theme: string; corner: "br" | "bl"; size: "small" | "medium" | "large" }
+export const DEFAULT_SETTINGS: ChatCitySettings = { enabled: true, theme: "egypt", corner: "br", size: "medium" };
+
+type Sync = { get(key: string): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void> };
+type Chrome = { storage: { sync: Sync; local: Sync & { remove(key: string): Promise<void> }; onChanged: { addListener(fn: (changes: Record<string, { newValue?: unknown }>, area: string) => void): void } }; runtime: { getURL(path: string): string }; tabs?: { query(q: object): Promise<Array<{ url?: string }>> } };
+export const chromeApi = () => (globalThis as unknown as { chrome: Chrome }).chrome;
+
+export async function loadSettings(): Promise<ChatCitySettings> {
+  const stored = (await chromeApi().storage.sync.get("settings")).settings as Partial<ChatCitySettings> | undefined;
+  return { ...DEFAULT_SETTINGS, ...stored };
+}
+export const saveSettings = (settings: ChatCitySettings) => chromeApi().storage.sync.set({ settings });
+
+const RESERVED = new Set(["directory", "videos", "settings", "search", "downloads", "jobs", "turbo", "subscriptions", "inventory", "drops", "wallet", "friends", "messages", "following", "p", "store", "prime", "broadcast", "u", "privacy", "legal", "team"]);
+/** The channel a twitch.tv URL is showing, or undefined for non-channel pages. */
+export function channelFromUrl(url: string): string | undefined {
+  let path: string[];
+  try { path = new URL(url).pathname.split("/").filter(Boolean); } catch { return undefined; }
+  let name = path[0];
+  if (name === "popout" || name === "moderator" || name === "embed") name = path[1];
+  if (!name || RESERVED.has(name.toLowerCase())) return undefined;
+  return /^[a-z0-9_]{2,25}$/i.test(name) ? name.toLowerCase() : undefined;
+}

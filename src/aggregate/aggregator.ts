@@ -14,6 +14,10 @@ export interface GrowthSignals {
   scoredMessages: number; minusMessages: number;
   /** Points per rule id and per visible label, for attacks and overlay pops. */
   byRule: Record<string, number>; byLabel: Record<string, number>;
+  /** Plus points earned per chatter this tick (only chatters who netted positive). */
+  byUser: Record<string, number>;
+  /** Best purely positive message this tick, if any. */
+  highlight?: { user: string; text: string; points: number };
 }
 export class Aggregator {
   private messages: Array<{ message: ChatMessage; receivedAt: number; category: Category; signal: ReturnType<typeof analyzeMessage> }> = [];
@@ -46,11 +50,18 @@ export class Aggregator {
         supportPoints += signal.supportPoints;
       }
       const deltaCounts = emptyCounts();
-      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, scoredMessages: 0, minusMessages: 0, byRule: {}, byLabel: {} };
+      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, scoredMessages: 0, minusMessages: 0, byRule: {}, byLabel: {}, byUser: {} };
       let deltaRaidViewers = 0;
       for (const { message, category, signal, hits } of this.pending) {
         growthSignals.scoredMessages++;
-        if (hits.some(hit => hit.points < 0)) growthSignals.minusMessages++;
+        const negative = hits.some(hit => hit.points < 0);
+        if (negative) growthSignals.minusMessages++;
+        const earned = hits.reduce((sum, hit) => sum + hit.points, 0);
+        if (earned > 0 && message.user) growthSignals.byUser[message.user] = (growthSignals.byUser[message.user] ?? 0) + earned;
+        const text = message.text.trim();
+        if (!negative && earned >= 1 && text.length >= 6 && text.length <= 90 && (!growthSignals.highlight || earned > growthSignals.highlight.points)) {
+          growthSignals.highlight = { user: message.user, text, points: earned };
+        }
         for (const hit of hits) {
           if (hit.points >= 0) growthSignals.plusPoints += hit.points; else growthSignals.minusPoints += hit.points;
           growthSignals.byRule[hit.rule] = (growthSignals.byRule[hit.rule] ?? 0) + hit.points;

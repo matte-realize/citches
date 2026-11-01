@@ -1,6 +1,20 @@
 import { Group, MathUtils } from "three";
 import type { Object3D } from "three";
-import { block, coneGeo, cylinderGeo, place, sharedMat, sphereGeo } from "./kit.js";
+import { bakeStatic, block, coneGeo, cylinderGeo, place, sharedMat, sphereGeo } from "./kit.js";
+
+/**
+ * Agents move every frame, so they skip the (static) shadow map. A flat dark footprint baked into
+ * the model keeps them visibly planted on the ground instead.
+ */
+function contactShadow(parent: Group, width: number, length: number) {
+  const shadow = block(parent, width, 0.004, length, 0, 0.003, 0, sharedMat(0x1a1c1e, 1), 0, false);
+  shadow.receiveShadow = false;
+}
+function bakeAgent(root: Group, movingParts: Group[]) {
+  for (const part of movingParts) { bakeStatic(part, 2); part.userData.keep = true; }
+  bakeStatic(root, 2);
+  root.traverse(object => { object.castShadow = false; });
+}
 import type { CityTheme, CityThemeId } from "./theme.js";
 
 type Random = () => number;
@@ -71,9 +85,12 @@ export function makePerson(random: Random, era: number, themeId: CityThemeId, th
   const armL = limb(-0.088, 0.375, 0.16, 0.022, cloth, skin);
   const armR = limb(0.088, 0.375, 0.16, 0.022, cloth, skin);
   armL.rotation.z = -0.12; armR.rotation.z = 0.12;
-  // Only the torso casts a shadow: tiny limb shadows cost draw calls and are invisible at this scale.
+  const footprint = place(root, cylinderGeo(0.09, 0.09, 0.004, 8), sharedMat(0x1a1c1e, 1), 0, 0.003, 0, false);
+  footprint.receiveShadow = false;
+  // Merge each limb and the body into a couple of draw calls; limbs stay separate so they can swing.
+  for (const part of [legL, legR, armL, armR, head]) { bakeStatic(part, 2); part.userData.keep = true; }
+  bakeStatic(body, 2);
   root.traverse(object => { object.castShadow = false; });
-  body.children[0].castShadow = true;
   return { root, body, head, legL, legR, armL, armR, height: 0.5 * scale };
 }
 
@@ -181,6 +198,8 @@ export function makeCar(random: Random, era: number, theme: CityTheme): VehicleM
     block(root, 0.05, 0.025, 0.012, x, r + 0.055, -length / 2 - 0.004, tail, 0, false);
   }
   const wheels = [-1, 1].flatMap(x => [-1, 1].map(z => wheel(root, x * (width / 2 - 0.005), z * length * 0.31, r)));
+  contactShadow(root, width + 0.04, length + 0.04);
+  bakeAgent(root, wheels as Group[]);
   return { root, wheels, legs: [], length, width, wheelRadius: r };
 }
 
@@ -195,6 +214,8 @@ export function makeBus(random: Random, theme: CityTheme): VehicleModel {
   const head = sharedMat(0xfff4cc, 0.3, { emissive: 0xffe2a0, emissiveIntensity: 1.6 });
   for (const x of [-0.09, 0.09]) block(root, 0.05, 0.03, 0.01, x, r + 0.06, length / 2 + 0.005, head, 0, false);
   const wheels = [-1, 1].flatMap(x => [-0.3, 0.26].map(z => wheel(root, x * (width / 2 - 0.005), z, r)));
+  contactShadow(root, width + 0.04, length + 0.04);
+  bakeAgent(root, wheels as Group[]);
   return { root, wheels, legs: [], length, width, wheelRadius: r };
 }
 
@@ -227,6 +248,8 @@ export function makeWagon(random: Random): VehicleModel {
   if (cargo < 0.5) for (const z of [-0.2, -0.06]) place(root, cylinderGeo(0.045, 0.045, 0.1, 8), sharedMat(0x8a6a43, 1), 0, 0.23, z);
   else place(root, sphereGeo(0.1, 8, 5), sharedMat(0xd8be73, 1), 0, 0.2, -0.12).scale.set(1, 0.6, 1.3);
   const wheels = [-0.135, 0.135].map(x => wheel(root, x, -0.14, 0.08));
+  contactShadow(root, 0.3, 0.72);
+  bakeAgent(root, [...wheels as Group[], ...legs]);
   return { root, wheels, legs, length: 0.7, width: 0.28, wheelRadius: 0.08 };
 }
 
@@ -246,6 +269,8 @@ export function makeBlimp(theme: CityTheme): VehicleModel {
   propeller.position.set(0, -0.38, -0.2);
   block(propeller, 0.26, 0.03, 0.01, 0, 0, 0, sharedMat(0x3a3530, 0.6));
   root.add(propeller);
+  propeller.userData.keep = true;
+  bakeStatic(root, 2);
   return { root, wheels: [], legs: [], length: 1.7, width: 0.7, wheelRadius: 1, propeller };
 }
 
@@ -267,5 +292,8 @@ export function makeSheep(random: Random) {
     root.add(leg);
     legs.push(leg);
   }
+  const footprint = place(root, cylinderGeo(0.13, 0.13, 0.004, 8), sharedMat(0x2a3326, 1), 0, 0.003, 0, false);
+  footprint.receiveShadow = false;
+  bakeAgent(root, [head, ...legs]);
   return { root, head, legs };
 }

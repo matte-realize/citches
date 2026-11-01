@@ -41,6 +41,27 @@ The plot is laid out in planned blocks: streets run every four tiles, so each bl
 
 The city is drawn as isometric pixel art to match the HUD: the scene renders at low resolution, gets dark outlines wherever depth or surface direction changes, and is upscaled with hard pixel edges and hard shadows. `?pixel=1.5` is the default (3 device pixels per art pixel on retina screens); `?pixel=2` or `3` is chunkier and `?pixel=1` renders smooth.
 
+## Browser extension (any Twitch stream)
+
+The Chrome extension draws a city over **any** Twitch channel you watch. It needs no backend: it reads that channel's public chat anonymously and runs the same scoring pipeline in the browser. Each channel's city is saved in the extension, so it is still there next time you visit.
+
+```sh
+npm run build:extension
+```
+
+Then open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and pick the `extension-dist/` folder. Open any live channel on twitch.tv. The toolbar popup switches the city on or off, picks the civilization, corner and size, and can reset the current channel's city. Hover the player for the rotate buttons. Only you see the city; it is not added to the stream.
+
+What you will see:
+
+- The city is named after the channel, and the scoreboard lists its **top builders**.
+- Builds pop up credited to the chatters whose messages paid for them, for example `+1 HOME by name & name`.
+- Villagers repeat wholesome chat messages in speech bubbles.
+- Every few homes the district gets a civic building for its era: wells, stalls and totems; windmills, smithies, fountains and watchtowers; factories, water towers, gas stations and arcades; radio towers, wind turbines, data centres, stadiums and solar farms.
+- Streets fill with devices (traffic lights that cycle, phone booths, vending machines, mailboxes, hydrants, bus stops, benches, EV chargers), and modern roofs get dishes, antennas, AC units and drones.
+- Chimneys smoke, birds fly over, builds kick up dust and sparkles, and every new era gets a fireworks show.
+
+The web app has the same view: `/?channel=<name>` reads a channel's chat directly, `Q`/`E` (or the on-screen buttons) rotate the view in 90 degree steps, and `?fps=30` caps the frame rate (overlays default to 30).
+
 ## Twitch extension overlay
 
 `overlay.html` is the Twitch video-overlay entry point. It loads the Twitch Extension Helper, renders with a transparent background, floats the plot as a small island in a corner of the stream, and shows the score bar in pixel type. Any page also accepts `?overlay=1` to preview overlay mode locally; `&corner=bl|br|center` moves the city and `&zoom=1.5` scales it.
