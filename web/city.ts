@@ -21,7 +21,7 @@ type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group;
 type Particle = { position: Vector3; velocity: Vector3; size: number; color: Color; life: number; maxLife: number; gravity: number; drag?: number };
 const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
-/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 3 = default pixel art). */
+/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 1.5 = default pixel art). */
 export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number }
 
 const GRID = 32;
@@ -137,15 +137,18 @@ export class ChatCity {
       cityRadius: () => this.activeRadius
     }, this.theme, themeId);
     // Isometric pixel art to match the HUD: render at low resolution, outline edges, upscale crisp.
-    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 3));
+    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 1.5));
     const pixelArt = this.pixelSize > 1;
+    // Work in device pixels so retina screens keep detail and every art pixel is a whole number wide.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const devicePixelSize = Math.max(2, Math.round(this.pixelSize * dpr));
     this.renderer = new WebGLRenderer({ antialias: !pixelArt, alpha: true, premultipliedAlpha: true });
-    this.renderer.setPixelRatio(pixelArt ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(dpr);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = pixelArt ? BasicShadowMap : PCFShadowMap; // hard-edged pixel shadows
     if (pixelArt) {
       this.composer = new EffectComposer(this.renderer);
-      const pixelPass = new RenderPixelatedPass(this.pixelSize, this.scene, this.camera, { normalEdgeStrength: 0.35, depthEdgeStrength: 0.55 });
+      const pixelPass = new RenderPixelatedPass(devicePixelSize, this.scene, this.camera, { normalEdgeStrength: 0.35, depthEdgeStrength: 0.55 });
       // Outlines darken colour only, so silhouettes stay opaque over a transparent overlay.
       const fsQuad = (pixelPass as unknown as { _fsQuad: { material: ShaderMaterial } })._fsQuad;
       fsQuad.material.fragmentShader = fsQuad.material.fragmentShader.replace("gl_FragColor = texel * Strength;", "gl_FragColor = vec4(texel.rgb * Strength, texel.a);");
