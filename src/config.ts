@@ -15,8 +15,8 @@ export const config = {
    */
   scoring: {
     weights: {
-      chat: 0.1, hype: 1, kindness: 1.4, bigBrain: 1.2, curious: 0.5, support: 4,
-      hate: -10, toxic: -2.2, spam: -0.5, shouting: -0.7, copypasta: -1, flood: -0.8, lowEffort: -0.25
+      chat: 0.1, hype: 1, laugh: 0.3, kindness: 1.4, bigBrain: 1.2, curious: 0.5, support: 4,
+      hate: -10, toxic: -2.2, spam: -0.5, shouting: -0.4, copypasta: -1, flood: -0.8, lowEffort: -0.25
     },
     negativeKeywords: [
       "trash", "garbage", "boring", "cringe", "mid", "sucks", "suck", "worst", "stupid", "idiot", "dumb", "loser", "washed",
@@ -25,9 +25,10 @@ export const config = {
     ],
     kindKeywords: ["thank you", "thanks", "ty", "appreciate", "welcome", "proud of", "you got this", "respect", "well played", "wp", "<3"],
     bigBrainComplexity: 0.55,
-    shoutMinLetters: 10, shoutRatio: 0.75,
+    /** Caps are normal hype on Twitch; only long, mostly-capital messages count as shouting. */
+    shoutMinLetters: 20, shoutRatio: 0.8,
     copypastaMinLength: 12, copypastaRepeats: 3,
-    floodWindowMs: 10_000, floodMessages: 4,
+    floodWindowMs: 10_000, floodMessages: 5,
     memoryMs: 20_000
   },
   threat: {
@@ -48,7 +49,8 @@ export const config = {
     washOutFrom: 0.5, washOutBonus: 6,
     technologyPenalty: 0.35
   },
-  spam: { emoteRatio: 0.6, repeatedCharacterLength: 5, maxShortMessageLength: 4, shortRepeatMinimum: 3 },
+  /** What counts as spam. Short emote reactions and stretched words ("noooo") are normal chat. */
+  spam: { emoteRatio: 0.8, emoteWallMinimum: 6, repeatedCharacterLength: 14, repeatedWordMinimum: 6 },
   events: {
     rateReference: 4, countMultiplier: 1, intensityMultiplier: 1,
     raidMinimumViewers: 1, disasterThreshold: 2, fireworksThreshold: 2.5, fireworksCooldownMs: 6000,

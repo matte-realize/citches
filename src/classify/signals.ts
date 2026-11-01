@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import type { Category, ChatMessage } from "../types.js";
+import { readSlang } from "../score/slang.js";
 
 export interface MessageSignal {
   eligible: boolean;
@@ -20,7 +21,8 @@ export function analyzeMessage(message: ChatMessage, category: Category): Messag
   const structureScore = Math.min(Math.max(0, sentences - 1) / 2, 1);
   const complexity = Math.min(1, lengthScore * 0.48 + uniqueRatio * 0.34 + structureScore * 0.18);
   const lower = message.text.toLowerCase();
-  const positive = config.positiveKeywords.some(keyword => {
+  const slang = readSlang(message.text);
+  const positive = slang.hype + slang.love > 0 || config.positiveKeywords.some(keyword => {
     const escaped = keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?:^|\\b)${escaped}(?:$|\\b)`, "u").test(lower);
   });

@@ -1,6 +1,8 @@
 import { config } from "../config.js";
 import type { MessageSignal } from "../classify/signals.js";
 import type { Category, ChatMessage } from "../types.js";
+import { readSlang } from "./slang.js";
+import type { SlangSummary } from "./slang.js";
 
 /** One labelled reason a message moved the city score, e.g. { label: "HYPE", points: 1 }. */
 export interface ScoreHit { rule: string; label: string; points: number }
@@ -13,6 +15,7 @@ export interface RuleInput {
   lower: string;
   words: string[];
   context: ScoreContext;
+  slang: SlangSummary;
 }
 
 /**
@@ -41,7 +44,10 @@ const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/g
 export class ScoreContext {
   private texts: Array<{ key: string; at: number }> = [];
   private users: Array<{ user: string; at: number }> = [];
-  observe(message: ChatMessage, now = Date.now()) {
+  private now = Date.now();
+  /** Times come from the messages themselves, so replays at any speed behave like live chat. */
+  observe(message: ChatMessage, now = message.timestamp || Date.now()) {
+    this.now = now;
     const horizon = now - config.scoring.memoryMs;
     this.texts = this.texts.filter(item => item.at >= horizon);
     this.users = this.users.filter(item => item.at >= horizon);
@@ -54,7 +60,7 @@ export class ScoreContext {
     if (key.length < config.scoring.copypastaMinLength) return 0;
     return this.texts.filter(item => item.key === key).length;
   }
-  userBurst(user: string, windowMs: number, now = Date.now()) {
+  userBurst(user: string, windowMs: number, now = this.now) {
     return this.users.filter(item => item.user === user && item.at >= now - windowMs).length;
   }
 }
@@ -62,18 +68,20 @@ export class ScoreContext {
 export const SCORE_RULES: ScoreRule[] = [
   // ---- pluses ----
   { id: "chat", label: "CHAT", silent: true, test: ({ signal }) => signal.eligible ? 1 : 0 },
-  { id: "hype", label: "HYPE", test: ({ lower, signal }) => signal.eligible && isHype(lower) ? 1 : 0 },
-  { id: "kindness", label: "KINDNESS", test: ({ lower, signal }) => signal.eligible && isKind(lower) ? 1 : 0 },
+  // A "W" (or WWWW, W W W) is a win: it counts once, however many times it is repeated.
+  { id: "hype", label: "HYPE", test: ({ lower, signal, slang }) => signal.eligible && (slang.hype > 0 || isHype(lower)) ? 1 : 0 },
+  { id: "laugh", label: "LOL", test: ({ slang }) => slang.laugh > 0 ? 1 : 0 },
+  { id: "kindness", label: "KINDNESS", test: ({ lower, signal, slang }) => signal.eligible && (slang.love > 0 || isKind(lower)) ? 1 : 0 },
   { id: "bigBrain", label: "BIG BRAIN", test: ({ signal, text, context }) => signal.complexity >= config.scoring.bigBrainComplexity && context.repeats(text) < 2 ? 1 : 0 },
   { id: "curious", label: "CURIOUS", test: ({ category }) => category === "QUESTION" ? 1 : 0 },
   { id: "support", label: "SUPPORT", test: ({ signal }) => signal.supportPoints },
   // ---- minuses ----
   { id: "hate", label: "HATE", test: ({ lower }) => isHate(lower) ? 1 : 0 },
-  { id: "toxic", label: "TOXIC", test: ({ lower }) => isToxic(lower) ? 1 : 0 },
+  { id: "toxic", label: "TOXIC", test: ({ lower, slang }) => slang.negative > 0 || isToxic(lower) ? 1 : 0 },
   { id: "spam", label: "SPAM", test: ({ category }) => category === "SPAM" ? 1 : 0 },
   {
     id: "shouting", label: "SHOUTING", test: ({ text, category }) => {
-      if (category === "SPAM") return 0;
+      if (category === "SPAM" || readSlang(text).positiveOnly) return 0; // "WWWWWWWWWW" is cheering, not shouting
       const letters = text.replace(/[^\p{L}]/gu, "");
       if (letters.length < config.scoring.shoutMinLetters) return 0;
       const upper = letters.replace(/[^\p{Lu}]/gu, "").length;
@@ -82,7 +90,7 @@ export const SCORE_RULES: ScoreRule[] = [
   },
   { id: "copypasta", label: "COPYPASTA", test: ({ text, context }) => context.repeats(text) >= config.scoring.copypastaRepeats ? 1 : 0 },
   { id: "flood", label: "FLOOD", test: ({ message, context }) => context.userBurst(message.user, config.scoring.floodWindowMs) >= config.scoring.floodMessages ? 1 : 0 },
-  { id: "lowEffort", label: "MEH", test: ({ words, lower, category }) => category !== "SPAM" && words.length <= 1 && lower.length <= 2 && !isHype(lower) ? 1 : 0 }
+  { id: "lowEffort", label: "MEH", test: ({ words, lower, category, slang }) => category !== "SPAM" && slang.tokens <= 1 && !slang.allSlang && !slang.laugh && words.length <= 1 && lower.replace(/[^\p{L}\p{N}]/gu, "").length === 1 && !isHype(lower) ? 1 : 0 }
 ];
 
 export function scoreMessage(message: ChatMessage, category: Category, signal: MessageSignal, context: ScoreContext): ScoreHit[] {
@@ -90,7 +98,7 @@ export function scoreMessage(message: ChatMessage, category: Category, signal: M
   const lower = text.toLowerCase();
   const words = lower.match(/[\p{L}\p{N}']+/gu) ?? [];
   context.observe(message);
-  const input: RuleInput = { message, category, signal, text, lower, words, context };
+  const input: RuleInput = { message, category, signal, text, lower, words, context, slang: readSlang(text) };
   const hits: ScoreHit[] = [];
   for (const rule of SCORE_RULES) {
     const amount = rule.test(input);
