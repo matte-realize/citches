@@ -39,7 +39,7 @@ Points accumulate into the on-screen **CITY POINTS** counter, and each tick's bi
 
 The plot is laid out in planned blocks: streets run every four tiles, so each block is eight street-facing lots around a backyard tile (trees, vegetable plots or a sheep paddock). The founding campfire sits in the central block as an open plaza. New homes go to the best lot: infill on streets that already exist first, then compact growth outward, finishing partly built blocks before starting new ones; landmarks prefer corner lots. Every home's front door faces its street.
 
-The city is drawn as isometric pixel art to match the HUD: the scene renders at low resolution, gets dark outlines wherever depth or surface direction changes, and is upscaled with hard pixel edges and hard shadows. `?pixel=2` is the default; `?pixel=3` is chunkier and `?pixel=1` renders smooth.
+The city is drawn as isometric pixel art to match the HUD: the scene renders at low resolution, gets dark outlines wherever depth or surface direction changes, and is upscaled with hard pixel edges and hard shadows. `?pixel=3` is the default; `?pixel=4` is chunkier, `?pixel=2` finer, and `?pixel=1` renders smooth.
 
 ## Twitch extension overlay
 

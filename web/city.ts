@@ -21,7 +21,7 @@ type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group;
 type Particle = { position: Vector3; velocity: Vector3; size: number; color: Color; life: number; maxLife: number; gravity: number; drag?: number };
 const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
-/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 2 = default pixel art). */
+/** `pixelSize` is how many screen pixels each rendered pixel covers (1 = smooth, 3 = default pixel art). */
 export interface CityOptions { transparent?: boolean; zoom?: number; pixelSize?: number }
 
 const GRID = 32;
@@ -137,7 +137,7 @@ export class ChatCity {
       cityRadius: () => this.activeRadius
     }, this.theme, themeId);
     // Isometric pixel art to match the HUD: render at low resolution, outline edges, upscale crisp.
-    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 2));
+    this.pixelSize = Math.max(1, Math.min(8, options.pixelSize ?? 3));
     const pixelArt = this.pixelSize > 1;
     this.renderer = new WebGLRenderer({ antialias: !pixelArt, alpha: true, premultipliedAlpha: true });
     this.renderer.setPixelRatio(pixelArt ? 1 : Math.min(window.devicePixelRatio, 2));

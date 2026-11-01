@@ -18,7 +18,7 @@ const host = document.querySelector<HTMLDivElement>("#app")!;
 const city = new ChatCity(host, themeFromSearch(), {
   transparent: overlay,
   zoom: Number(params.get("zoom")) || (overlay ? 1.25 : 1),
-  pixelSize: Number(params.get("pixel")) || 2
+  pixelSize: Number(params.get("pixel")) || 3
 });
 if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) (window as unknown as { chatCity: ChatCity }).chatCity = city;
 const hud = new CityHud({ overlay, screenPoint: () => city.screenPoint(city.focus) });
