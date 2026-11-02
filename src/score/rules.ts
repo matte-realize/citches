@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import type { MessageSignal } from "../classify/signals.js";
 import type { Category, ChatMessage } from "../types.js";
 import { readSlang } from "./slang.js";
+import { isHateful, isToxicSlur } from "../moderation/censor.js";
 import type { SlangSummary } from "./slang.js";
 
 /** One labelled reason a message moved the city score, e.g. { label: "HYPE", points: 1 }. */
@@ -43,25 +44,67 @@ const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/g
 /** Short rolling memory used by rules that need more than one message (copypasta, floods). */
 export class ScoreContext {
   private texts: Array<{ key: string; at: number }> = [];
-  private users: Array<{ user: string; at: number }> = [];
+  private textHead = 0;
+  private textCounts = new Map<string, number>();
+  private users: Array<{ user: string; entry: { at: number } }> = [];
+  private userHead = 0;
+  private userTimes = new Map<string, { times: Array<{ at: number }>; head: number }>();
   private now = Date.now();
   /** Times come from the messages themselves, so replays at any speed behave like live chat. */
   observe(message: ChatMessage, now = message.timestamp || Date.now()) {
     this.now = now;
     const horizon = now - config.scoring.memoryMs;
-    this.texts = this.texts.filter(item => item.at >= horizon);
-    this.users = this.users.filter(item => item.at >= horizon);
+    while (this.textHead < this.texts.length && this.texts[this.textHead].at < horizon) {
+      const { key } = this.texts[this.textHead++];
+      const count = (this.textCounts.get(key) ?? 1) - 1;
+      if (count) this.textCounts.set(key, count); else this.textCounts.delete(key);
+    }
+    if (this.textHead > 1024 && this.textHead * 2 > this.texts.length) {
+      this.texts = this.texts.slice(this.textHead);
+      this.textHead = 0;
+    }
+    while (this.userHead < this.users.length && this.users[this.userHead].entry.at < horizon) {
+      const { user, entry } = this.users[this.userHead++];
+      const bucket = this.userTimes.get(user);
+      if (!bucket || bucket.times[bucket.head] !== entry) continue;
+      bucket.head++;
+      if (bucket.head === bucket.times.length) this.userTimes.delete(user);
+      else if (bucket.head > 128 && bucket.head * 2 > bucket.times.length) {
+        bucket.times = bucket.times.slice(bucket.head);
+        bucket.head = 0;
+      }
+    }
+    if (this.userHead > 1024 && this.userHead * 2 > this.users.length) {
+      this.users = this.users.slice(this.userHead);
+      this.userHead = 0;
+    }
     const key = normalize(message.text);
-    if (key.length >= config.scoring.copypastaMinLength) this.texts.push({ key, at: now });
-    this.users.push({ user: message.user, at: now });
+    if (key.length >= config.scoring.copypastaMinLength) {
+      this.texts.push({ key, at: now });
+      this.textCounts.set(key, (this.textCounts.get(key) ?? 0) + 1);
+    }
+    const user = message.user;
+    const entry = { at: now };
+    this.users.push({ user, entry });
+    const bucket = this.userTimes.get(user) ?? { times: [], head: 0 };
+    bucket.times.push(entry);
+    this.userTimes.set(user, bucket);
   }
   repeats(text: string) {
     const key = normalize(text);
     if (key.length < config.scoring.copypastaMinLength) return 0;
-    return this.texts.filter(item => item.key === key).length;
+    return this.textCounts.get(key) ?? 0;
   }
   userBurst(user: string, windowMs: number, now = this.now) {
-    return this.users.filter(item => item.user === user && item.at >= now - windowMs).length;
+    const bucket = this.userTimes.get(user);
+    if (!bucket) return 0;
+    const cutoff = now - windowMs;
+    let low = bucket.head, high = bucket.times.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (bucket.times[middle].at < cutoff) low = middle + 1; else high = middle;
+    }
+    return bucket.times.length - low;
   }
 }
 
@@ -76,8 +119,8 @@ export const SCORE_RULES: ScoreRule[] = [
   { id: "curious", label: "CURIOUS", test: ({ category }) => category === "QUESTION" ? 1 : 0 },
   { id: "support", label: "SUPPORT", test: ({ signal }) => signal.supportPoints },
   // ---- minuses ----
-  { id: "hate", label: "HATE", test: ({ lower }) => isHate(lower) ? 1 : 0 },
-  { id: "toxic", label: "TOXIC", test: ({ lower, slang }) => slang.negative > 0 || isToxic(lower) ? 1 : 0 },
+  { id: "hate", label: "HATE", test: ({ lower }) => isHate(lower) || isHateful(lower) ? 1 : 0 },
+  { id: "toxic", label: "TOXIC", test: ({ lower, slang }) => slang.negative > 0 || isToxic(lower) || isToxicSlur(lower) ? 1 : 0 },
   { id: "spam", label: "SPAM", test: ({ category }) => category === "SPAM" ? 1 : 0 },
   {
     id: "shouting", label: "SHOUTING", test: ({ text, category }) => {

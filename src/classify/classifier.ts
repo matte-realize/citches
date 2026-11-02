@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import type { Category, ChatMessage } from "../types.js";
 import { readSlang } from "../score/slang.js";
+import { isHateful } from "../moderation/censor.js";
 
 const questionStart = /^(who|what|why|how|when|where|is|are|can|do|does)\b/i;
 export function classify(message: ChatMessage): Category {
@@ -8,7 +9,7 @@ export function classify(message: ChatMessage): Category {
   const text = message.text.trim();
   const words = text.split(/\s+/).filter(Boolean);
   const lower = text.toLowerCase();
-  if (config.hateKeywords.some(word => word && lower.includes(word.toLowerCase()))) return "HATE";
+  if (isHateful(text) || config.hateKeywords.some(word => word && lower.includes(word.toLowerCase()))) return "HATE";
   // "W", "W W W", "POGGGG", "KEKW KEKW": all-positive slang is enthusiasm, not spam.
   if (readSlang(text).positiveOnly) return "COMMENT";
   // Fast chats are mostly short reactions ("LUL", "noooo", "no no no"). Only real floods count as

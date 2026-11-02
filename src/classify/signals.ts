@@ -9,6 +9,13 @@ export interface MessageSignal {
   supportPoints: number;
 }
 
+// This list is consulted for every eligible chat line. Compile it once instead of rebuilding a
+// regular expression for every keyword on every message.
+const positivePatterns = config.positiveKeywords.map(keyword => {
+  const escaped = keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\b)${escaped}(?:$|\\b)`, "u");
+});
+
 export function analyzeMessage(message: ChatMessage, category: Category): MessageSignal {
   const supportPoints = Math.max(0, Number(message.supportPoints ?? 0));
   const words = message.text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
@@ -22,9 +29,6 @@ export function analyzeMessage(message: ChatMessage, category: Category): Messag
   const complexity = Math.min(1, lengthScore * 0.48 + uniqueRatio * 0.34 + structureScore * 0.18);
   const lower = message.text.toLowerCase();
   const slang = readSlang(message.text);
-  const positive = slang.hype + slang.love > 0 || config.positiveKeywords.some(keyword => {
-    const escaped = keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|\\b)${escaped}(?:$|\\b)`, "u").test(lower);
-  });
+  const positive = slang.hype + slang.love > 0 || positivePatterns.some(pattern => pattern.test(lower));
   return { eligible: true, positive, complexity, supportPoints };
 }
