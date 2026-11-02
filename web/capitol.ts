@@ -1,4 +1,4 @@
-import { Group } from "three";
+import { Group, Vector3 } from "three";
 import type { Material } from "three";
 import { Batcher, bakeStatic, block, coneGeo, cylinderGeo, place, prismGeo, pyramidGeo, sharedMat, sphereGeo, tint } from "./kit.js";
 import type { Animated } from "./specials.js";
@@ -107,7 +107,7 @@ export function buildCapitol(stage: number, style: CapitolStyle, theme: CityThem
     for (const [x, z] of [[-1.25, 1.1], [1.25, 1.1]] as const) {
       place(group, cylinderGeo(0.16, 0.18, 0.08, 12), stone, x, 0.04, z);
       place(group, cylinderGeo(0.13, 0.13, 0.01, 12), sharedMat(0x4aa8d0, 0.1, { emissive: 0x1d6f9a, emissiveIntensity: 0.6 }), x, 0.085, z, false);
-      animated.push({ kind: "smoke", at: { x, y: 0.12, z } as never, rate: 3, color: 0xbfe8f5 });
+      animated.push({ kind: "smoke", at: new Vector3(x, 0.12, z), rate: 3, color: 0xbfe8f5 });
     }
     donors.slice(0, 4).forEach((donor, index) => {
       const x = -0.9 + index * 0.6;

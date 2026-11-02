@@ -1,4 +1,4 @@
-import { BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, SphereGeometry } from "three";
+import { Box3, BoxGeometry, BufferGeometry, Color, ConeGeometry, CylinderGeometry, Float32BufferAttribute, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, SphereGeometry } from "three";
 import type { BufferGeometry as Geometry, ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
@@ -119,7 +119,7 @@ export function tint(color: number, random: () => number, hue = 0.02, light = 0.
 
 const vertexColorMaterials = new Map<number, MeshStandardMaterial>();
 /** Shared vertex-coloured material per roughness band, so differently coloured parts can merge. */
-function vertexColorMaterial(roughness: number) {
+export function vertexColorMaterial(roughness: number) {
   const band = Math.round(roughness * 4) / 4;
   let material = vertexColorMaterials.get(band);
   if (!material) {
@@ -149,7 +149,7 @@ export function grimeMaterial(source: MeshStandardMaterial, level: number) {
 }
 
 /** Plain opaque colours can be baked into vertex colours; glowing, metallic or see-through ones keep their material. */
-function bakeKey(material: Material) {
+export function bakeKey(material: Material) {
   if (!(material instanceof MeshStandardMaterial) || material.transparent || material.vertexColors || material.map) return material.uuid;
   const glows = material.emissiveIntensity > 0 && (material.emissive.r + material.emissive.g + material.emissive.b) > 0;
   if (glows || material.metalness > 0.2) return material.uuid;
@@ -161,6 +161,58 @@ function bakeKey(material: Material) {
  * material, so a building made of 60 parts usually draws in two or three calls (and the same in
  * the shadow pass). Objects flagged `userData.keep` (moving parts, flames) are left untouched.
  */
+/**
+ * How far a model reaches from its own centre on the ground (x/z), in its own frame. Flat ground
+ * decals (below y 0.03) are ignored; instanced batches (windows) are measured per instance.
+ */
+export function footprintHalf(root: Object3D) {
+  root.updateMatrixWorld(true);
+  const toLocal = new Matrix4().copy(root.matrixWorld).invert();
+  const box = new Box3(), part = new Box3(), instance = new Matrix4(), relative = new Matrix4();
+  root.traverse(object => {
+    const mesh = object as Mesh;
+    if (!mesh.geometry || object === root) return;
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    relative.multiplyMatrices(toLocal, mesh.matrixWorld);
+    if ((object as InstancedMesh).isInstancedMesh) {
+      const batch = object as InstancedMesh;
+      for (let i = 0; i < batch.count; i++) {
+        batch.getMatrixAt(i, instance);
+        part.copy(mesh.geometry.boundingBox!).applyMatrix4(instance).applyMatrix4(relative);
+        if (part.max.y > 0.03) box.union(part);
+      }
+    } else {
+      part.copy(mesh.geometry.boundingBox!).applyMatrix4(relative);
+      if (part.max.y > 0.03) box.union(part);
+    }
+  });
+  if (box.isEmpty()) return 0;
+  return Math.max(-box.min.x, box.max.x, -box.min.z, box.max.z);
+}
+
+/**
+ * Shrinks a model uniformly so it stays within `maxHalf` of its centre, so it never pokes into
+ * the neighbouring lot. Scales the children, not the root, because build animations own the
+ * root's scale. Returns the factor applied (1 when it already fits).
+ */
+export function fitFootprint(root: Object3D, maxHalf: number, spinning: Array<{ object: Object3D; axis: "x" | "y" | "z" }> = []) {
+  // Spinning parts (sails, rotors, rings) are measured through a half turn, not one frozen pose.
+  let half = footprintHalf(root);
+  const STEPS = 24;
+  for (let step = 1; spinning.length && step < STEPS; step++) {
+    for (const { object, axis } of spinning) object.rotation[axis] += Math.PI / STEPS;
+    half = Math.max(half, footprintHalf(root));
+  }
+  if (spinning.length) for (const { object, axis } of spinning) object.rotation[axis] -= (Math.PI / STEPS) * (STEPS - 1);
+  // A hair of headroom for peaks between samples.
+  if (spinning.length) half *= 1.01;
+  if (half <= maxHalf) return 1;
+  const factor = maxHalf / half;
+  for (const child of root.children) { child.position.multiplyScalar(factor); child.scale.multiplyScalar(factor); }
+  root.updateMatrixWorld(true);
+  return factor;
+}
+
 export function bakeStatic(root: Object3D, minMeshes = 4) {
   root.updateMatrixWorld(true);
   const inverse = new Matrix4().copy(root.matrixWorld).invert();

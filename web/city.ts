@@ -1,7 +1,8 @@
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { StaticMerger } from "./merge.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPixelatedPass } from "three/examples/jsm/postprocessing/RenderPixelatedPass.js";
-import { ACESFilmicToneMapping, BasicShadowMap, Box3, ShaderMaterial, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
+import { Quaternion, ACESFilmicToneMapping, BasicShadowMap, Box3, ShaderMaterial, BoxGeometry, DynamicDrawUsage, InstancedMesh, MeshBasicMaterial, Object3D, BufferGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, Fog, Group, HemisphereLight, IcosahedronGeometry, LineBasicMaterial, LineLoop, Mesh, MeshStandardMaterial, OrthographicCamera, PCFShadowMap, PlaneGeometry, PointLight, SRGBColorSpace, Scene, SphereGeometry, TorusGeometry, Vector3, WebGLRenderer } from "three";
 import type { ColorRepresentation, Material, MeshStandardMaterialParameters } from "three";
 import type { AttackKind, SimEvent } from "../src/types.js";
 import type { CommunityProgress } from "../src/types.js";
@@ -11,19 +12,23 @@ import { CAPITOL_NAMES, buildCapitol, capitolStyleFor } from "./capitol.js";
 import type { CapitolDonor } from "../src/types.js";
 import { SpecialKit } from "./specials.js";
 import type { Animated } from "./specials.js";
-import { bakeStatic, disposeObject, grimeMaterial, scaleSharedGlow } from "./kit.js";
+import { bakeStatic, disposeObject, fitFootprint, grimeMaterial, scaleSharedGlow } from "./kit.js";
 import { lightingAt, localHour } from "./daycycle.js";
 import { CityLife } from "./life.js";
 import type { Door, NetCell } from "./life.js";
-import { DIRS, buildStreetLayer } from "./streets.js";
+import { DIRS, STREET_RANK, buildStreetLayer } from "./streets.js";
+import type { StreetStyle } from "./streets.js";
 import { CITY_THEMES } from "./theme.js";
+import * as bustle from "./bustle.js";
 import type { CityThemeId } from "./theme.js";
 
 export { CITY_THEMES } from "./theme.js";
 export type { CityThemeId } from "./theme.js";
 
 type TileKind = "empty" | "house" | "landmark" | "fire";
-type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number; index: number };
+type Tile = { x: number; z: number; kind: TileKind; road: boolean; group: Group; building?: Group; trees: Group[]; burningUntil?: number; revealing?: boolean; revealElapsed?: number; index: number;
+  /** Rubble left by an attack, and who/what stood there, so chat can rebuild it first. */
+  rubblePile?: Group; formerKind?: "house" | "landmark"; formerOwner?: string };
 type Particle = { position: Vector3; velocity: Vector3; size: number; color: Color; life: number; maxLife: number; gravity: number; drag?: number };
 const MAX_PARTICLES = 900;
 type AccessPlan = { dx: number; dz: number; yaw: number; route: Tile[] };
@@ -75,6 +80,8 @@ export class ChatCity {
   private groundDirty = true;
   /** The shadow map is only redrawn when something that casts a shadow changes. */
   private shadowsDirty = true;
+  private lastShadowUpdate = 0;
+  private static readonly SHADOW_UPDATE_MS = 100;
   private maxFps: number;
   private frameBudget = 0;
 
@@ -165,6 +172,14 @@ export class ChatCity {
   private viewAngle = 0;
   private targetViewAngle = 0;
   private viewQuarter = 0;
+  /** Viewer camera: zoom multiplier and the ground point the camera looks at, both eased. */
+  private userZoom = 1;
+  private targetUserZoom = 1;
+  private pan = new Vector3();
+  private targetPan = new Vector3();
+  private follow = false;
+  static readonly MIN_ZOOM = 0.6;
+  static readonly MAX_ZOOM = 8;
 
   constructor(private host: HTMLElement, themeId: CityThemeId = themeFromSearch(), options: CityOptions = {}) {
     this.themeId = themeId;
@@ -172,9 +187,11 @@ export class ChatCity {
     this.transparent = Boolean(options.transparent);
     this.zoom = options.zoom && options.zoom > 0 ? options.zoom : 1;
     this.maxFps = options.maxFps ?? 60;
+    this.merger.enabled = new URLSearchParams(window.location.search).get("merge") !== "0";
     this.timeZone = options.timeZone;
     this.fixedHour = options.hour;
     this.randomState = [...themeId].reduce((seed, char) => Math.imul(seed ^ char.charCodeAt(0), 16777619) >>> 0, 2166136261);
+    this.planStreetGrid();
     this.homes = new HomeKit(() => this.random(), this.theme, themeId);
     this.specials = new SpecialKit(() => this.random(), this.theme, themeId);
     this.life = new CityLife(this.root, {
@@ -377,7 +394,7 @@ export class ChatCity {
   private frameCamera() {
     this.camera.position.copy(this.cameraBase);
     this.camera.lookAt(0, 0, 0);
-    this.camera.zoom = 1.18 * this.zoom;
+    this.camera.zoom = 1.18 * this.zoom * this.userZoom;
     this.camera.updateProjectionMatrix();
   }
 
@@ -391,17 +408,37 @@ export class ChatCity {
   };
 
   private updateCameraFrustum() {
+    const lift = this.groundAnchor();
     this.camera.left = -this.viewSpan * this.aspect / 2;
     this.camera.right = this.viewSpan * this.aspect / 2;
-    this.camera.top = this.viewSpan / 2;
-    this.camera.bottom = -this.viewSpan / 2;
+    this.camera.top = this.viewSpan / 2 + lift;
+    this.camera.bottom = -this.viewSpan / 2 + lift;
     this.camera.updateProjectionMatrix();
   }
+
+  /**
+   * Overlay only: shift the view so the front tip of the ground sits on the bottom edge of the
+   * frame (right on the scoreboard bar) instead of floating mid-box over an empty transparent band.
+   * Computed at the default zoom from the camera's fixed iso angle, so pan, zoom and quarter turns
+   * still work on top of it (the plot is symmetric under rotation).
+   */
+  private groundAnchor() {
+    if (!this.transparent) return 0;
+    // The camera looks at the origin from cameraBase; its screen-up direction in the world:
+    const forward = this.cameraBase.clone().negate().normalize();
+    const up = new Vector3(0, 1, 0).addScaledVector(forward, -forward.y).normalize();
+    const reach = this.activeRadius + 0.5;
+    const low = -reach * (Math.abs(up.x) + Math.abs(up.z)); // lowest ground corner, in view units
+    const halfSpan = this.viewSpan / 2 / (1.18 * this.zoom);
+    return low + ChatCity.GROUND_ANCHOR * halfSpan;
+  }
+  /** Where the ground's front tip lands in the overlay frame: 1 = exactly on the bottom edge. */
+  private static readonly GROUND_ANCHOR = 0.96;
 
   private get eraIndex(): number { return this.recoveryEra ?? this.technologyEra; }
 
   get stage(): string {
-    const era = ["CAMPFIRE SETTLEMENT", "HUTS & GATHERING", "SETTLED HOMES", "STONE CITY", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE"][this.eraIndex];
+    const era = ["CAMPFIRE SETTLEMENT", "HUTS & GATHERING", "SETTLED HOMES", "STONE CITY", "INDUSTRIAL CITY", "AGE OF AIRSHIPS", "EMPIRE", "TYPE I · PLANETARY", "TYPE II · STELLAR", "TYPE III · GALACTIC"][this.eraIndex];
     return this.recoveryEra === undefined ? era : `RECOVERY · ${era}`;
   }
 
@@ -422,6 +459,7 @@ export class ChatCity {
   private setActiveRadius(radius: number) {
     this.activeRadius = radius;
     this.targetSpan = 18 + Math.max(0, radius - 4.5) * 1.9;
+    this.updateCameraFrustum();
     const center = (GRID - 1) / 2;
     for (const tile of this.tiles) {
       const shouldBeVisible = Math.abs(tile.x - center) <= radius && Math.abs(tile.z - center) <= radius;
@@ -613,7 +651,10 @@ export class ChatCity {
         return Boolean(neighbor && (neighbor.building || neighbor === this.hearthTile));
       });
       const px = tile.group.position.x, pz = tile.group.position.z;
-      cells.set(key, { key, x: tile.x, z: tile.z, px, pz, links, doors: doorFlags, hash: Math.abs(Math.imul(tile.x * 73856093 ^ tile.z * 19349663, 2654435761)) >>> 3 });
+      cells.set(key, {
+        key, x: tile.x, z: tile.z, px, pz, links, doors: doorFlags, hash: Math.abs(Math.imul(tile.x * 73856093 ^ tile.z * 19349663, 2654435761)) >>> 3,
+        style: this.streetStyleAt(tile), styles: DIRS.map((_, d) => this.streetStyleAt(tile, d))
+      });
       doorFlags.forEach((open, d) => {
         if (!open) return;
         const neighbor = this.tileByCoord.get(this.key(tile.x + DIRS[d][0], tile.z + DIRS[d][1]));
@@ -625,21 +666,44 @@ export class ChatCity {
     if (this.streetLayer) { this.root.remove(this.streetLayer); disposeObject(this.streetLayer); }
     this.streetLayer = buildStreetLayer([...cells.values()], this.technologyEra, this.theme);
     this.root.add(this.streetLayer);
-    const houses = this.tiles.filter(tile => tile.building && tile.kind === "house").length;
+    // Empty homes have no residents walking about.
+    const houses = this.tiles.filter(tile => tile.building && tile.kind === "house" && !tile.building.userData.vacant).length;
     this.life.setNetwork(cells, doors, houses);
   }
 
   private unlockTechnology(era: number) {
     const previousEra = this.technologyEra;
-    this.technologyEra = Math.max(this.technologyEra, Math.min(6, era));
+    this.technologyEra = Math.max(this.technologyEra, Math.min(ChatCity.MAX_ERA, era));
     this.streetsDirty = true;
-    this.life.setEra(this.technologyEra);
+    this.life.setEra(Math.min(6, this.technologyEra));
+    if (this.technologyEra >= 7 && this.technologyEra !== previousEra) this.buildSky();
     if (this.technologyEra > previousEra && this.technologyEra >= 1) this.expandPlot();
     if (this.technologyEra > previousEra && this.technologyEra >= 2) this.tryRenewDistrict();
     if (this.technologyEra === 1 && previousEra < 1) {
       const firstHome = this.tiles.find(tile => tile.building && tile.kind === "house");
       if (firstHome) { this.addAnimal(firstHome); this.addAnimal(firstHome); }
     }
+  }
+
+  /**
+   * The city falls back an era: new construction uses the older style, space-age sky works come
+   * down, and the newest buildings start to crumble. Chat can climb back up.
+   */
+  private loseEra(era: number, historical: boolean) {
+    const previousEra = this.technologyEra;
+    this.technologyEra = Math.max(0, Math.min(ChatCity.MAX_ERA, era));
+    if (this.technologyEra >= previousEra) return;
+    if (this.recoveryEra !== undefined) this.recoveryEra = Math.min(this.recoveryEra, this.technologyEra);
+    this.streetsDirty = true;
+    this.life.setEra(Math.min(6, this.technologyEra));
+    if (this.technologyEra >= 7) this.buildSky();
+    else if (this.sky) { this.root.remove(this.sky); disposeObject(this.sky); this.sky = undefined; }
+    // Buildings from the lost era are the first to fall into disrepair.
+    const stranded = this.tiles.filter(tile => tile.building && (tile.building.userData.era ?? 0) > this.technologyEra && tile.building.userData.collapse === undefined);
+    for (const tile of stranded.slice(0, 8)) this.setWear(tile, ((tile.building!.userData.wear as number | undefined) ?? 0) + 1);
+    if (historical) return;
+    this.flashSky(0x3a1a22, 1.6);
+    this.shake = Math.max(this.shake, 0.8);
   }
 
   private addAnimal(tile: Tile) {
@@ -676,25 +740,30 @@ export class ChatCity {
   private tryRenewDistrict() {
     const era = this.technologyEra;
     if (era < 2 || this.recoveryEra !== undefined || era <= this.lastRedevelopedEra) return;
-    const homes = this.tiles.filter(tile => tile.building && tile.kind === "house");
+    // Only unowned, standing homes are redeveloped: nobody loses the home they earned.
+    const homes = this.tiles.filter(tile => tile.building && tile.kind === "house" && !tile.building.userData.owner && tile.building.userData.collapse === undefined);
     for (const center of homes) {
       const cluster = homes
         .filter(tile => Math.abs(tile.x - center.x) + Math.abs(tile.z - center.z) <= 2)
         .sort((a, b) => (a === center ? -1 : b === center ? 1 : 0))
         .slice(0, 3);
       if (cluster.length < 3 || !this.findAccessPlan(center)) continue;
-      for (const tile of cluster) {
-        if (tile.building) {
-          tile.group.remove(tile.building);
-          disposeObject(tile.building);
-          tile.building = undefined;
-          tile.kind = "empty";
-          this.totalBuildings = Math.max(0, this.totalBuildings - 1);
-        }
-      }
+      // Build the new landmark first; only clear the neighbours once it is standing.
+      const old = center.building!;
+      center.group.remove(old);
+      center.building = undefined;
+      center.kind = "empty";
       const renewed = era >= 4 ? this.makeSkyscraper(center) : this.makeLandmark(center);
-      if (!renewed) continue;
-      this.totalBuildings++;
+      if (!renewed) { center.group.add(old); center.building = old; center.kind = "house"; continue; }
+      disposeObject(old);
+      for (const tile of cluster.slice(1)) {
+        if (!tile.building) continue;
+        tile.group.remove(tile.building);
+        disposeObject(tile.building);
+        tile.building = undefined;
+        tile.kind = "empty";
+        this.totalBuildings = Math.max(0, this.totalBuildings - 1);
+      }
       this.lastRedevelopedEra = era;
       return;
     }
@@ -919,8 +988,10 @@ export class ChatCity {
 
   /** Quiet chat: an old building (chosen with a bias toward the oldest) gets more run down. */
   private wearDown(historical: boolean, gentle = false) {
-    // Gentle wear (while asleep or away) stops at "shabby": nothing falls to ruin while nobody is here.
-    const candidates = this.wearable().filter(tile => !gentle || (tile.building!.userData.wear ?? 0) < 2).sort((a, b) => (a.building!.userData.builtAt ?? 0) - (b.building!.userData.builtAt ?? 0));
+    // Gentle wear (while asleep or away) can run a place down to a ruin but never knocks it over,
+    // and empty homes whose families moved out go first.
+    const candidates = this.wearable().filter(tile => !gentle || (tile.building!.userData.wear ?? 0) < 3)
+      .sort((a, b) => (gentle ? Number(Boolean(b.building!.userData.vacant)) - Number(Boolean(a.building!.userData.vacant)) : 0) || (a.building!.userData.builtAt ?? 0) - (b.building!.userData.builtAt ?? 0));
     if (!candidates.length) return;
     // Mostly the oldest third of the city, sometimes anywhere.
     const pool = this.random() < 0.75 ? candidates.slice(0, Math.max(1, Math.ceil(candidates.length / 3))) : candidates;
@@ -961,6 +1032,9 @@ export class ChatCity {
     this.capitolStage = stage;
     if (this.capitolGroup) { this.root.remove(this.capitolGroup); disposeObject(this.capitolGroup); }
     const { group, animated } = buildCapitol(stage, capitolStyleFor(this.themeId, this.theme), this.theme, () => this.random(), donors, this.themeId);
+    // The capitol owns the 3x3 clearing around the hearth; it must not reach the homes beyond it.
+    const fit = fitFootprint(group, ChatCity.CAPITOL_HALF, animated.flatMap(part => part.kind === "spin" ? [part] : []));
+    if (fit < 1) for (const part of animated) if (part.kind === "smoke") part.at.multiplyScalar(fit);
     group.position.copy(center.group.position).setY(0);
     this.root.add(group);
     this.capitolGroup = group;
@@ -987,7 +1061,7 @@ export class ChatCity {
 
   // ---------- the audience game: commands and owned homes ----------
   /** Lets the HUD show who did what: "@name planted a tree", name tags over homes, etc. */
-  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim" | "donate" | "capitol" | "chapter" | "welcome"; user: string; at?: Vector3; level?: number; cost?: number; color?: string; title?: string }) => void;
+  onNotice?: (notice: { kind: "plant" | "repair" | "cheer" | "home" | "nohome" | "broke" | "fine" | "upgrade" | "claim" | "donate" | "capitol" | "chapter" | "welcome" | "moveOut" | "moveIn"; user: string; at?: Vector3; level?: number; cost?: number; color?: string; title?: string }) => void;
   private homesByOwner = new Map<string, Tile[]>();
 
   private ownerColor(owner: string, color?: string) {
@@ -1263,6 +1337,7 @@ export class ChatCity {
     bakeStatic(pile, 2);
     tile.group.add(pile);
     tile.trees.push(pile); // cleared like trees when the lot is rebuilt
+    tile.rubblePile = pile;
     this.shadowsDirty = true;
   }
 
@@ -1478,9 +1553,15 @@ export class ChatCity {
   }
 
   private animateBuild(building: Group, tile: Tile, immediate = false) {
+    // Lots are 1x1 and neighbours build right up to the edge: shrink anything wider than its lot.
+    const spinning = this.animated.flatMap(entry => entry.building === building && entry.part.kind === "spin" ? [entry.part] : []);
+    const fit = fitFootprint(building, ChatCity.LOT_HALF, spinning);
+    if (fit < 1) {
+      for (const entry of this.animated) if (entry.building === building && entry.part.kind === "smoke") entry.part.at.multiplyScalar(fit);
+    }
     // Chimneys recorded by the home kit: about half of them smoke.
     for (const at of (building.userData.smoke as Array<{ x: number; y: number; z: number }> | undefined) ?? []) {
-      if (this.random() < 0.5) this.animated.push({ tile, building, part: { kind: "smoke", at: new Vector3(at.x, at.y, at.z), rate: 1.1, color: 0x8a8a8a } });
+      if (this.random() < 0.5) this.animated.push({ tile, building, part: { kind: "smoke", at: new Vector3(at.x * fit, at.y * fit, at.z * fit), rate: 1.1, color: 0x8a8a8a } });
     }
     bakeStatic(building);
     if (!immediate) {
@@ -1501,19 +1582,73 @@ export class ChatCity {
   }
 
   // ---------- town planning ----------
-  // Streets run every BLOCK tiles, so the plot divides into 3x3 blocks: eight lots that front a
-  // street around one interior tile kept as a backyard, garden or paddock. The founding campfire
-  // sits in the central block, which stays an open plaza.
-  private static readonly BLOCK = 4;
+  // Street lines cut the plot into blocks of uneven size, like a real town: tight 2x2 blocks where
+  // lines sit three apart, the classic eight-lots-round-a-backyard block at four, and deep blocks
+  // with a shared courtyard at five. The central block round the founding campfire is always the
+  // classic one, and each line gets a character (boulevard, lane, brick, tram, market).
   private static readonly BUILD_STEPS = 6;
   private static readonly UNBUILD_SECONDS = 0.9;
-  private static readonly STREET_OFFSET = 13;
-  private gridMod(value: number) { const m = (value - ChatCity.STREET_OFFSET) % ChatCity.BLOCK; return m < 0 ? m + ChatCity.BLOCK : m; }
-  private isStreet(tile: Tile) { return this.gridMod(tile.x) === 0 || this.gridMod(tile.z) === 0; }
-  private isInterior(tile: Tile) { return this.gridMod(tile.x) === 2 && this.gridMod(tile.z) === 2; }
+  private static readonly CENTRAL_LINES = [13, 17];
+  private streetLinesX = new Set<number>();
+  private streetLinesZ = new Set<number>();
+  private lineStyles = new Map<string, StreetStyle>();
+
+  private planStreetGrid() {
+    // Seeded from the theme so a city keeps its street plan across reloads, without touching the
+    // main random stream that buildings use.
+    let seed = [...this.themeId].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 2246822519) >>> 0, 0x9e3779b9);
+    const rand = () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const spacing = () => [3, 4, 4, 5, 5, 4][Math.floor(rand() * 6)];
+    const styleFor = (central: boolean): StreetStyle => {
+      if (central) return "boulevard";
+      const roll = rand();
+      return roll < 0.32 ? "avenue" : roll < 0.5 ? "lane" : roll < 0.66 ? "brick" : roll < 0.82 ? "tram" : roll < 0.94 ? "market" : "boulevard";
+    };
+    for (const [axis, lines] of [["x", this.streetLinesX], ["z", this.streetLinesZ]] as const) {
+      const [low, high] = ChatCity.CENTRAL_LINES;
+      for (const line of ChatCity.CENTRAL_LINES) lines.add(line);
+      for (let at = high + spacing(); at < GRID; at += spacing()) lines.add(at);
+      for (let at = low - spacing(); at >= 0; at -= spacing()) lines.add(at);
+      // The two lines framing the plaza on one axis are the boulevard; the other axis gets one.
+      for (const line of [...lines].sort((a, b) => a - b)) {
+        const central = axis === "x" ? ChatCity.CENTRAL_LINES.includes(line) : line === high;
+        let style = styleFor(central);
+        // Narrow lanes only between small blocks would be cramped; tight blocks get lanes, wide get avenues.
+        if (!central && lines.has(line - 3) && lines.has(line + 3) && rand() < 0.5) style = "lane";
+        this.lineStyles.set(`${axis}${line}`, style);
+      }
+    }
+  }
+
+  /** Street character of a road arm leaving a tile in direction d (or of the tile's middle). */
+  private streetStyleAt(tile: Tile, d?: number): StreetStyle {
+    const onX = this.streetLinesX.has(tile.x), onZ = this.streetLinesZ.has(tile.z);
+    const xs = this.lineStyles.get(`x${tile.x}`), zs = this.lineStyles.get(`z${tile.z}`);
+    if (d !== undefined) {
+      // Arms along z run down an x line; arms along x run along a z line.
+      const style = DIRS[d][0] === 0 ? (onX ? xs : undefined) : (onZ ? zs : undefined);
+      if (style) return style;
+    }
+    if (onX && onZ && xs && zs) return STREET_RANK[xs] >= STREET_RANK[zs] ? xs : zs;
+    return (onX ? xs : onZ ? zs : undefined) ?? "avenue";
+  }
+
+  private isStreet(tile: Tile) { return this.streetLinesX.has(tile.x) || this.streetLinesZ.has(tile.z); }
+  /** Deep in a block: not on, nor beside, any street line. */
+  private deep(value: number, lines: Set<number>) { return !lines.has(value) && !lines.has(value - 1) && !lines.has(value + 1); }
+  private isInterior(tile: Tile) { return this.deep(tile.x, this.streetLinesX) && this.deep(tile.z, this.streetLinesZ); }
+  /** The backyard tile of a lot's block nearest the lot (blocks three apart have none). */
   private blockInterior(tile: Tile) {
-    const bx = tile.x - this.gridMod(tile.x) + 2, bz = tile.z - this.gridMod(tile.z) + 2;
-    return this.tileByCoord.get(this.key(bx, bz));
+    const nearest = (value: number, lines: Set<number>) => {
+      let lo = value, hi = value;
+      while (lo > 0 && !lines.has(lo)) lo--;
+      while (hi < GRID - 1 && !lines.has(hi)) hi++;
+      let best: number | undefined;
+      for (let v = lo + 1; v < hi; v++) if (this.deep(v, lines) && (best === undefined || Math.abs(v - value) < Math.abs(best - value))) best = v;
+      return best;
+    };
+    const bx = nearest(tile.x, this.streetLinesX), bz = nearest(tile.z, this.streetLinesZ);
+    return bx === undefined || bz === undefined ? undefined : this.tileByCoord.get(this.key(bx, bz));
   }
 
   private isOpenLot(tile: Tile) {
@@ -1607,13 +1742,15 @@ export class ChatCity {
 
   build(kind: "house" | "landmark", count: number, immediate = false, builders: string[] = []) {
     const owners = kind === "house" ? [...builders] : [];
+    let unplaced = 0;
     for (let n = 0; n < Math.min(30, Math.max(0, count)); n++) {
       let tile = this.chooseLot(kind);
       if (!tile && this.activeRadius < 15.5) {
         this.expandPlot();
         tile = this.chooseLot(kind);
       }
-      if (!tile) return;
+      // The plot is full: the rest of this growth modernises old buildings instead (below).
+      if (!tile) { unplaced = Math.min(30, count) - n; break; }
       for (const tree of tile.trees) tile.group.remove(tree);
       tile.trees = [];
       // Every few homes the district gets a civic building: a well, windmill, factory, arcade...
@@ -1632,24 +1769,35 @@ export class ChatCity {
       this.streetsDirty = true;
     }
     this.tryRenewDistrict();
-    this.upgradeOldHome(immediate);
+    for (let i = 0; i < 1 + unplaced; i++) if (!this.upgradeOldHome(immediate)) break;
   }
 
   /** Neighbourhoods modernise over time: one home two or more eras behind is rebuilt in today's style. */
-  private upgradeOldHome(immediate: boolean) {
-    if (this.recoveryEra !== undefined || this.eraIndex < 2) return;
+  private upgradeOldHome(immediate: boolean): boolean {
+    if (this.recoveryEra !== undefined || this.eraIndex < 2) return false;
+    const current = (tile: Tile) => tile.building && tile.building.userData.collapse === undefined && !tile.building.userData.monument;
     // Village lodges and other landmarks three or more eras out of date are rebuilt too (not civic specials).
-    const staleLandmark = this.tiles.find(tile => tile.building && tile.kind === "landmark" && !tile.building.userData.special && tile.building.userData.collapse === undefined && (tile.building.userData.era ?? 0) <= this.eraIndex - 3);
+    const staleLandmark = this.tiles.find(tile => current(tile) && tile.kind === "landmark" && !tile.building!.userData.special && (tile.building!.userData.era ?? 0) <= this.eraIndex - 3);
     if (staleLandmark && this.random() < 0.5) {
       const old = staleLandmark.building!;
       staleLandmark.group.remove(old);
       staleLandmark.building = undefined;
       staleLandmark.kind = "empty";
-      if (this.makeLandmark(staleLandmark, immediate)) disposeObject(old);
-      else { staleLandmark.group.add(old); staleLandmark.building = old; staleLandmark.kind = "landmark"; }
+      if (this.makeLandmark(staleLandmark, immediate)) { disposeObject(old); return true; }
+      staleLandmark.group.add(old); staleLandmark.building = old; staleLandmark.kind = "landmark";
     }
-    const stale = this.tiles.filter(tile => tile.building && tile.kind === "house" && (tile.building.userData.era ?? 0) <= this.eraIndex - 2);
-    if (!stale.length) return;
+    // Civic specials too: a village well does not survive into the space age.
+    const staleSpecial = this.tiles.find(tile => current(tile) && tile.building!.userData.special && (tile.building!.userData.era ?? 0) <= this.eraIndex - 3);
+    if (staleSpecial && this.random() < 0.35) {
+      const old = staleSpecial.building!;
+      staleSpecial.group.remove(old);
+      staleSpecial.building = undefined;
+      staleSpecial.kind = "empty";
+      if (this.makeSpecial(staleSpecial, immediate)) { disposeObject(old); return true; }
+      staleSpecial.group.add(old); staleSpecial.building = old; staleSpecial.kind = "landmark";
+    }
+    const stale = this.tiles.filter(tile => current(tile) && tile.kind === "house" && (tile.building!.userData.era ?? 0) <= this.eraIndex - 2);
+    if (!stale.length) return false;
     const tile = stale[Math.floor(this.random() * stale.length)];
     const old = tile.building!;
     tile.group.remove(old);
@@ -1663,8 +1811,82 @@ export class ChatCity {
         this.claimHome(tile, old.userData.owner as string);
       }
       disposeObject(old);
+      return true;
     }
-    else { tile.group.add(old); tile.building = old; tile.kind = "house"; }
+    tile.group.add(old); tile.building = old; tile.kind = "house";
+    return false;
+  }
+
+
+  // ---------- rebuilding after attacks ----------
+  private pendingRebuilds = 0;
+  private rebuilders: string[] = [];
+  private rebuildTimer = 0;
+
+  /** Chat rebuilds what an attack knocked down: rubble lots first, one after another, before anything new. */
+  rebuild(count: number, immediate = false, builders: string[] = []) {
+    if (immediate) {
+      for (let n = 0; n < count; n++) {
+        const lot = this.nextRubbleLot();
+        if (lot) this.rebuildLot(lot, true, builders[n]);
+        else this.build("house", 1, true, builders[n] ? [builders[n]] : []);
+      }
+      return;
+    }
+    this.pendingRebuilds += Math.max(0, count);
+    this.rebuilders.push(...builders);
+  }
+
+  private hasRubble(tile: Tile) { return !!tile.rubblePile && tile.trees.includes(tile.rubblePile) && this.isOpenLot(tile); }
+
+  /** Rubble closest to the heart of town is cleared first. */
+  private nextRubbleLot() {
+    const hearth = this.hearthTile;
+    let best: Tile | undefined, bestDistance = Infinity;
+    for (const tile of this.tiles) {
+      if (!this.hasRubble(tile)) continue;
+      const distance = hearth ? Math.hypot(tile.x - hearth.x, tile.z - hearth.z) : 0;
+      if (distance < bestDistance) { best = tile; bestDistance = distance; }
+    }
+    return best;
+  }
+
+  private rebuildLot(tile: Tile, immediate: boolean, builder?: string) {
+    for (const tree of tile.trees) tile.group.remove(tree);
+    tile.trees = [];
+    tile.rubblePile = undefined;
+    const kind = tile.formerKind ?? "house";
+    const built = kind === "landmark" ? this.makeLandmark(tile, immediate) : this.makeHouse(tile, immediate);
+    if (!built) return false;
+    // The family that lived here gets its home back; otherwise the chatter who rebuilt it moves in.
+    const owner = tile.formerOwner ?? builder;
+    if (owner && tile.kind === "house" && tile.building) this.claimHome(tile, owner);
+    tile.formerKind = undefined;
+    tile.formerOwner = undefined;
+    this.totalBuildings++;
+    this.streetsDirty = true;
+    if (!immediate) {
+      this.focus.copy(tile.group.position);
+      for (let i = 0; i < 8; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.7, 0.2 + this.random() * 0.5, (this.random() - 0.5) * 0.7)), [0xffe08a, 0xfff4c8, 0x9be8ff][i % 3], 0.05, 0.9, new Vector3((this.random() - 0.5) * 0.8, 1.2, (this.random() - 0.5) * 0.8), 0.9, true);
+    }
+    return true;
+  }
+
+  private updateRebuilds(delta: number) {
+    if (this.pendingRebuilds <= 0) return;
+    this.rebuildTimer -= delta;
+    if (this.rebuildTimer > 0) return;
+    this.rebuildTimer = 0.35;
+    const lot = this.nextRubbleLot();
+    if (lot) {
+      if (this.rebuildLot(lot, false, this.rebuilders.shift())) this.pendingRebuilds--;
+      return;
+    }
+    // No rubble yet: wait while the attack is still burning or toppling, otherwise build fresh.
+    const settling = this.tiles.some(tile => tile.kind === "fire" || tile.building?.userData.collapse !== undefined);
+    if (settling) return;
+    this.build("house", this.pendingRebuilds, false, this.rebuilders.splice(0));
+    this.pendingRebuilds = 0;
   }
 
   boom(viewers: number, historical = false) {
@@ -1690,7 +1912,14 @@ export class ChatCity {
         }).slice(0, count)
       : [];
     if (historical || !seed) {
-      for (const tile of damageSet) this.destroyBuilding(tile);
+      for (const tile of damageSet) {
+        const kind = tile.kind === "landmark" ? "landmark" : "house";
+        this.destroyBuilding(tile);
+        tile.formerKind = kind;
+        for (const tree of tile.trees) tile.group.remove(tree);
+        tile.trees = [];
+        this.addRubble(tile);
+      }
       return;
     }
     const target = seed.group.position.clone();
@@ -1699,15 +1928,438 @@ export class ChatCity {
     const scale = Math.min(1, 0.45 + count * 0.2);
     const ignite = (tile: Tile) => {
       if (!tile.building || tile.kind === "fire") return;
+      tile.formerKind = tile.kind === "landmark" ? "landmark" : "house";
       tile.kind = "fire"; tile.burningUntil = performance.now() + durationMs; this.addFlames(tile);
     };
     if (kind === "meteor") this.meteorStrike(target, () => { damageSet.forEach(ignite); this.shake = 0.3 + scale * 0.3; }, scale);
+    else if (kind === "asteroid") this.meteorStrike(target, () => { damageSet.forEach(ignite); this.shake = 0.9; this.flashSky(0xffb070, 1.2); }, 1.25 + scale * 0.5);
     else if (kind === "storm") this.lightningStorm(target, damageSet, ignite, scale);
     else if (kind === "swarm") this.locustSwarm(target, damageSet, scale);
+    else if (kind === "drones") this.locustSwarm(target, damageSet, scale, true);
+    else if (kind === "quake") this.earthquake(target, damageSet, scale);
+    else if (kind === "flood") this.flashFlood(target, damageSet, scale);
+    else if (kind === "tornado") this.tornado(target, damageSet, scale);
+    else if (kind === "flare") this.solarFlare(damageSet, ignite);
+    else if (kind === "gamma") this.gammaBurst(target, damageSet, ignite);
+    else if (kind === "blackhole") this.blackHole(target, damageSet);
     else damageSet.forEach(ignite);
   }
 
   /** A glowing rock streaks in, then the impact sets the district alight. */
+  // ---------- natural disasters and catastrophes ----------
+  private static readonly MAX_ERA = 9;
+  /** Half a lot, less a small gap so neighbouring buildings never touch. */
+  private static readonly LOT_HALF = 0.46;
+  /** Half the hearth's 3x3 clearing, less the same gap. */
+  private static readonly CAPITOL_HALF = 1.42;
+
+  /** Knock a building down in reverse-build steps, leaving rubble. */
+  private topple(tile: Tile, rubble = true) {
+    const building = tile.building;
+    if (!building || building.userData.collapse !== undefined) return;
+    building.userData.collapse = 0;
+    building.userData.leavesRubble = rubble;
+  }
+
+  /** Brief tint of the whole sky (and lights) for flares, asteroid impacts and bursts. */
+  private flashSky(color: number, seconds = 1) {
+    const light = this.claimLight(color, 60, 0.4, new Vector3(0, 14, 0));
+    let t = 0;
+    this.effects.push(delta => {
+      t += delta;
+      if (light) light.intensity = Math.max(0, 80 * (1 - t / seconds));
+      if (t < seconds) return false;
+      this.releaseLight(light);
+      return true;
+    });
+  }
+
+  /** Earthquake: the ground shudders, cracks open and buildings shake apart one by one. */
+  private earthquake(target: Vector3, damage: Tile[], scale: number) {
+    const cracks: Mesh[] = [];
+    for (let i = 0; i < 7; i++) {
+      const crack = new Mesh(new BoxGeometry(0.9 + this.random() * 1.6, 0.012, 0.05), mat(0x1c1612, 1));
+      crack.position.copy(target).add(new Vector3((this.random() - 0.5) * 4, 0.07, (this.random() - 0.5) * 4));
+      crack.rotation.y = this.random() * Math.PI;
+      crack.scale.x = 0.01;
+      this.root.add(crack);
+      cracks.push(crack);
+    }
+    damage.forEach((tile, index) => { if (tile.building) tile.building.userData.quakeAt = 0.6 + index * 0.35; });
+    let t = 0;
+    this.effects.push(delta => {
+      t += delta;
+      this.shake = Math.max(this.shake, t < 2.6 ? 0.55 + scale * 0.3 : 0);
+      for (const crack of cracks) crack.scale.x = Math.min(1, t / 1.2);
+      for (const tile of damage) {
+        const building = tile.building;
+        if (!building) continue;
+        if (building.userData.quakeAt !== undefined && t < building.userData.quakeAt) building.rotation.z = Math.sin(t * 40) * 0.04;
+        else if (building.userData.quakeAt !== undefined) {
+          building.userData.quakeAt = undefined;
+          building.rotation.z = 0;
+          this.topple(tile);
+        }
+      }
+      if (t < 2 + damage.length * 0.35) return false;
+      if (t < 14) return false;
+      for (const crack of cracks) { this.root.remove(crack); crack.geometry.dispose(); }
+      return true;
+    });
+  }
+
+  /** Flash flood: water rises over a district, sweeps the weakest homes away and drains. */
+  private flashFlood(target: Vector3, damage: Tile[], scale: number) {
+    const radius = 1.6 + scale * 1.6;
+    const water = new Mesh(new CylinderGeometry(radius, radius, 0.02, 28), new MeshStandardMaterial({ color: 0x3f8fd2, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.62, emissive: 0x1a4a7a, emissiveIntensity: 0.3 }));
+    water.position.copy(target).setY(0.02);
+    this.root.add(water);
+    damage.forEach((tile, index) => { if (tile.building) tile.building.userData.floodAt = 1.4 + index * 0.4; });
+    let t = 0;
+    const peak = 0.34;
+    this.effects.push(delta => {
+      t += delta;
+      const rise = t < 1.6 ? t / 1.6 : t < 4.4 ? 1 : Math.max(0, 1 - (t - 4.4) / 2.2);
+      water.position.y = 0.02 + rise * peak;
+      water.scale.setScalar(0.4 + Math.min(1, t / 1.6) * 0.6);
+      if (this.random() < 0.6 && rise > 0.3) this.puff(water.position.clone().add(new Vector3((this.random() - 0.5) * radius * 1.4, 0.02, (this.random() - 0.5) * radius * 1.4)), 0xdff4ff, 0.03, 0.6, new Vector3(0, 0.4, 0), 1.5, true);
+      for (const tile of damage) {
+        const building = tile.building;
+        if (building?.userData.floodAt !== undefined && t >= building.userData.floodAt) { building.userData.floodAt = undefined; this.topple(tile); }
+      }
+      if (t < 6.6) return false;
+      this.root.remove(water);
+      water.geometry.dispose();
+      (water.material as MeshStandardMaterial).dispose();
+      return true;
+    });
+  }
+
+  /** Tornado: a twisting funnel wanders through and lifts buildings apart as it passes. */
+  private tornado(target: Vector3, damage: Tile[], scale: number) {
+    const funnel = new Group();
+    const material = new MeshStandardMaterial({ color: 0x8a8f96, roughness: 1, transparent: true, opacity: 0.55 });
+    for (let i = 0; i < 7; i++) {
+      const ring = new Mesh(new TorusGeometry(0.12 + i * 0.11, 0.05 + i * 0.012, 5, 14), material);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 0.2 + i * 0.42;
+      funnel.add(ring);
+    }
+    funnel.scale.setScalar(0.8 + scale * 0.4);
+    const path = [target.clone().add(new Vector3(-4, 0, 3)), ...damage.map(tile => tile.group.position.clone()), target.clone().add(new Vector3(4, 0, -4))];
+    funnel.position.copy(path[0]);
+    this.root.add(funnel);
+    let t = 0;
+    const legSeconds = 1.1;
+    this.effects.push(delta => {
+      t += delta;
+      const leg = Math.min(path.length - 2, Math.floor(t / legSeconds));
+      const f = Math.min(1, (t - leg * legSeconds) / legSeconds);
+      funnel.position.lerpVectors(path[leg], path[leg + 1], f);
+      funnel.rotation.y += delta * 9;
+      funnel.children.forEach((ring, i) => { ring.position.x = Math.sin(t * 3 + i) * 0.06 * i; });
+      for (let i = 0; i < 3; i++) this.puff(funnel.position.clone().add(new Vector3((this.random() - 0.5) * 0.6, 0.1, (this.random() - 0.5) * 0.6)), 0x9a8a72, 0.05, 0.9, new Vector3((this.random() - 0.5) * 2, 2.5, (this.random() - 0.5) * 2), 0.6, true);
+      if (leg >= 1 && f > 0.6) { const tile = damage[leg - 1]; if (tile) this.topple(tile); }
+      this.shake = Math.max(this.shake, 0.15);
+      if (t < legSeconds * (path.length - 1)) return false;
+      this.root.remove(funnel);
+      funnel.children.forEach(ring => (ring as Mesh).geometry.dispose());
+      material.dispose();
+      return true;
+    });
+  }
+
+  /** Solar flare: the sky blazes orange, the grid browns out and exposed roofs catch fire. */
+  private solarFlare(damage: Tile[], ignite: (tile: Tile) => void) {
+    this.flashSky(0xff9a3a, 2.2);
+    scaleSharedGlow(0.1);
+    this.daylightClock = 4; // hold the brown-out before daylight restores the glow
+    let t = 0;
+    damage.forEach((tile, index) => { if (tile.building) tile.building.userData.flareAt = 0.5 + index * 0.25; });
+    this.effects.push(delta => {
+      t += delta;
+      for (const tile of damage) {
+        const building = tile.building;
+        if (building?.userData.flareAt !== undefined && t >= building.userData.flareAt) { building.userData.flareAt = undefined; ignite(tile); }
+      }
+      if (t < 3.2) return false;
+      this.daylightClock = 0;
+      return true;
+    });
+  }
+
+  /** Gamma-ray burst: a violet beam from deep space scorches a line through the city. */
+  private gammaBurst(target: Vector3, damage: Tile[], ignite: (tile: Tile) => void) {
+    const beam = new Mesh(new CylinderGeometry(0.22, 0.32, 40, 12, 1, true), new MeshStandardMaterial({ color: 0xd46bff, emissive: 0xb04aff, emissiveIntensity: 3, transparent: true, opacity: 0.75, side: 2 }));
+    beam.position.copy(target).setY(20);
+    beam.scale.set(0.05, 1, 0.05);
+    this.root.add(beam);
+    this.flashSky(0xc88aff, 1.6);
+    let t = 0;
+    this.effects.push(delta => {
+      t += delta;
+      const width = t < 0.4 ? t / 0.4 : t < 1.8 ? 1 : Math.max(0.01, 1 - (t - 1.8) / 0.8);
+      beam.scale.set(width * (1 + Math.sin(t * 40) * 0.08), 1, width);
+      if (t > 0.4 && t < 1.8) {
+        this.shake = Math.max(this.shake, 0.5);
+        for (let i = 0; i < 2; i++) this.puff(target.clone().setY(0.2), [0xd46bff, 0xffffff][i], 0.07, 0.8, new Vector3((this.random() - 0.5) * 4, 2 + this.random() * 2, (this.random() - 0.5) * 4), 3);
+      }
+      if (t > 0.6 && damage.length) { damage.forEach(ignite); damage.forEach(tile => this.topple(tile)); damage = []; }
+      if (t < 2.6) return false;
+      this.root.remove(beam);
+      beam.geometry.dispose();
+      (beam.material as MeshStandardMaterial).dispose();
+      return true;
+    });
+  }
+
+  /** Black hole: a pinprick opens above the city and swallows buildings whole, no rubble left. */
+  private blackHole(target: Vector3, damage: Tile[]) {
+    const hole = new Group();
+    hole.position.copy(target).setY(2.6);
+    const core = new Mesh(new SphereGeometry(0.5, 16, 12), new MeshBasicMaterial({ color: 0x000000 }));
+    const disk = new Mesh(new TorusGeometry(0.95, 0.16, 8, 40), new MeshStandardMaterial({ color: 0xffa040, emissive: 0xff6a20, emissiveIntensity: 2.4 }));
+    disk.rotation.x = Math.PI / 2 - 0.3;
+    const halo = new Mesh(new TorusGeometry(1.3, 0.04, 6, 40), new MeshStandardMaterial({ color: 0xd46bff, emissive: 0xb04aff, emissiveIntensity: 2, transparent: true, opacity: 0.7 }));
+    halo.rotation.x = Math.PI / 2 - 0.3;
+    hole.add(core, disk, halo);
+    hole.scale.setScalar(0.01);
+    this.root.add(hole);
+    const victims = damage.map((tile, index) => ({ tile, at: 1.2 + index * 0.45, start: tile.building?.position.clone() }));
+    let t = 0;
+    const end = 2.2 + damage.length * 0.45 + 1.4;
+    this.effects.push(delta => {
+      t += delta;
+      const grow = t < 1 ? t : t > end - 1 ? Math.max(0.01, end - t) : 1;
+      hole.scale.setScalar(grow);
+      disk.rotation.z += delta * 3;
+      halo.rotation.z -= delta * 1.5;
+      this.shake = Math.max(this.shake, 0.2 * grow);
+      for (let i = 0; i < 3; i++) {
+        // Debris spirals inward.
+        const angle = this.random() * Math.PI * 2, r = 2 + this.random() * 2;
+        const from = hole.position.clone().add(new Vector3(Math.cos(angle) * r, -1.8 + this.random(), Math.sin(angle) * r));
+        this.puff(from, [0x9a8a72, 0xffa040, 0xd46bff][i], 0.04, 0.7, hole.position.clone().sub(from).multiplyScalar(1.4), 0, true);
+      }
+      for (const victim of victims) {
+        const building = victim.tile.building;
+        if (!building || t < victim.at) continue;
+        const f = Math.min(1, (t - victim.at) / 0.9);
+        const local = victim.tile.group.worldToLocal(hole.position.clone());
+        building.position.lerpVectors(victim.start ?? building.position, local, f * f);
+        building.scale.setScalar(Math.max(0.01, 1 - f));
+        building.rotation.y += delta * 6 * f;
+        if (f >= 1) { this.destroyBuilding(victim.tile); victim.tile.building = undefined; }
+      }
+      if (t < end) return false;
+      this.root.remove(hole);
+      for (const part of [core, disk, halo]) { part.geometry.dispose(); (part.material as MeshStandardMaterial).dispose(); }
+      return true;
+    });
+  }
+
+  // ---------- Kardashev skies ----------
+  private sky?: Group;
+
+  /** Megastructures overhead: satellites (Type I), an orbital ring and space elevator (Type II), a wormhole (Type III). */
+  private buildSky() {
+    if (this.sky) { this.root.remove(this.sky); disposeObject(this.sky); }
+    const sky = new Group();
+    const era = this.technologyEra;
+    const glow = mat(this.theme.glow, 0.3, { emissive: this.theme.glow, emissiveIntensity: 2 });
+    const metal = mat(0xdfe4e8, 0.35, { metalness: 0.5 });
+    const spinners: Array<{ object: Object3D; speed: number }> = [];
+    // Type I: satellites and a swarm of orbital mirrors.
+    const orbit = new Group();
+    orbit.position.y = 9;
+    for (let i = 0; i < 5; i++) {
+      const satellite = new Group();
+      const angle = (i / 5) * Math.PI * 2;
+      satellite.position.set(Math.cos(angle) * (this.activeRadius + 3), (i % 2) * 0.8, Math.sin(angle) * (this.activeRadius + 3));
+      satellite.add(new Mesh(new BoxGeometry(0.22, 0.22, 0.32), metal));
+      for (const sx of [-1, 1]) {
+        const panel = new Mesh(new BoxGeometry(0.6, 0.02, 0.26), mat(0x2a4a8a, 0.3, { metalness: 0.4 }));
+        panel.position.x = sx * 0.42;
+        satellite.add(panel);
+      }
+      const light = new Mesh(new SphereGeometry(0.05, 6, 4), glow);
+      light.position.y = 0.14;
+      satellite.add(light);
+      orbit.add(satellite);
+    }
+    sky.add(orbit);
+    spinners.push({ object: orbit, speed: 0.08 });
+    if (era >= 8) {
+      // Type II: an orbital ring and a space elevator rising from the capitol.
+      const ring = new Group();
+      ring.position.y = 17;
+      const band = new Mesh(new TorusGeometry(this.activeRadius + 5, 0.14, 8, 72), metal);
+      band.rotation.x = Math.PI / 2;
+      ring.add(band);
+      for (let i = 0; i < 24; i++) {
+        const angle = (i / 24) * Math.PI * 2;
+        const lamp = new Mesh(new SphereGeometry(0.1, 6, 4), glow);
+        lamp.position.set(Math.cos(angle) * (this.activeRadius + 5), 0, Math.sin(angle) * (this.activeRadius + 5));
+        ring.add(lamp);
+      }
+      ring.rotation.z = 0.12;
+      sky.add(ring);
+      spinners.push({ object: ring, speed: 0.04 });
+      const base = this.hearthTile?.group.position ?? new Vector3();
+      const tether = new Mesh(new CylinderGeometry(0.04, 0.04, 40, 6), mat(0xe9edf0, 0.4, { metalness: 0.4 }));
+      tether.position.set(base.x + 1.4, 20, base.z - 1.4);
+      sky.add(tether);
+      const climber = new Mesh(new BoxGeometry(0.3, 0.4, 0.3), glow);
+      climber.position.set(base.x + 1.4, 2, base.z - 1.4);
+      climber.userData.climber = true;
+      sky.add(climber);
+    }
+    if (era >= 9) {
+      // Type III: a wormhole held open above the city.
+      const gate = new Group();
+      gate.position.set(-this.activeRadius - 2, 11, -this.activeRadius - 2);
+      gate.rotation.y = Math.PI / 4;
+      const rim = new Mesh(new TorusGeometry(2.2, 0.22, 10, 48), mat(0x262b33, 0.4, { metalness: 0.6, emissive: 0xb04aff, emissiveIntensity: 0.6 }));
+      const swirl = new Mesh(new CylinderGeometry(2, 2, 0.02, 40), new MeshStandardMaterial({ color: 0x6fd8ff, emissive: 0x9a5aff, emissiveIntensity: 1.6, transparent: true, opacity: 0.6 }));
+      swirl.rotation.x = Math.PI / 2;
+      const eye = new Mesh(new SphereGeometry(0.5, 12, 8), new MeshBasicMaterial({ color: 0xffffff }));
+      gate.add(rim, swirl, eye);
+      sky.add(gate);
+      spinners.push({ object: swirl, speed: 0.6 });
+    }
+    sky.userData.spinners = spinners;
+    this.root.add(sky);
+    this.sky = sky;
+  }
+
+  private updateSky(delta: number) {
+    const sky = this.sky;
+    if (!sky) return;
+    for (const { object, speed } of sky.userData.spinners as Array<{ object: Object3D; speed: number }>) object.rotation.y += speed * delta;
+    for (const child of sky.children) if (child.userData.climber) child.position.y = 2 + (Math.sin(this.actorClock * 0.15) * 0.5 + 0.5) * 30;
+  }
+
+  // ---------- air traffic ----------
+  private airClock = 12;
+  private airborne = 0;
+
+  /** Hot-air balloons over a growing town, prop planes and airliners later, takeoffs from airports. */
+  private updateAirTraffic(delta: number) {
+    this.airClock -= delta;
+    if (this.airClock > 0 || this.asleep) return;
+    const era = this.technologyEra;
+    this.airClock = 14 + this.random() * 16;
+    if (this.airborne >= 4) return;
+    const airports = this.tiles.filter(tile => tile.building?.userData.style === "airport" && tile.building.userData.collapse === undefined);
+    const day = this.nightGlow < 0.7;
+    const roll = this.random();
+    if (era >= 2 && era <= 6 && day && roll < 0.35) this.flyBalloon();
+    else if (airports.length && era >= 4 && roll < 0.75) this.flyPlane(airports[Math.floor(this.random() * airports.length)], era >= 5);
+    else if (era >= 5) this.flyPlane(undefined, true);
+  }
+
+  private flyBalloon() {
+    const balloon = bustle.balloon(() => this.random());
+    const reach = this.activeRadius + 6;
+    const angle = this.random() * Math.PI * 2;
+    const from = new Vector3(Math.cos(angle) * reach, 4 + this.random() * 2.5, Math.sin(angle) * reach);
+    const to = from.clone().multiplyScalar(-1).setY(from.y + 1.5);
+    balloon.scale.setScalar(0.55 + this.random() * 0.25);
+    balloon.position.copy(from);
+    this.root.add(balloon);
+    this.airborne++;
+    let t = 0;
+    const seconds = 60 + this.random() * 30;
+    this.effects.push(delta => {
+      t += delta / seconds;
+      balloon.position.lerpVectors(from, to, t);
+      balloon.position.y += Math.sin(t * 40) * 0.15;
+      if (t < 1) return false;
+      this.root.remove(balloon);
+      disposeObject(balloon);
+      this.airborne--;
+      return true;
+    });
+  }
+
+  /** A takeoff from an airport tile (rolls down the runway, climbs out), or an airliner passing high over. */
+  private flyPlane(from: Tile | undefined, jet: boolean) {
+    const plane = bustle.flyingPlane(this.theme, jet);
+    plane.scale.setScalar(from ? 0.45 : 0.8);
+    this.root.add(plane);
+    this.airborne++;
+    const reach = this.activeRadius + 8;
+    let t = 0;
+    const heading = this.random() * Math.PI * 2;
+    const start = from ? from.group.position.clone().setY(0.08) : new Vector3(Math.cos(heading) * reach, 8 + this.random() * 2, Math.sin(heading) * reach);
+    const direction = from ? new Vector3(1, 0, 0).applyQuaternion(from.building!.getWorldQuaternion(new Quaternion())).setY(0).normalize() : start.clone().multiplyScalar(-1).setY(0).normalize();
+    const seconds = from ? 16 : 22;
+    this.effects.push(delta => {
+      t += delta;
+      const f = t / seconds;
+      if (from) {
+        // Taxi and roll for a moment, then climb away.
+        const roll = Math.min(t, 2.5) * Math.min(t, 2.5) * 0.12;
+        const climb = Math.max(0, t - 2.5);
+        plane.position.copy(start).addScaledVector(direction, roll + climb * 1.6).setY(start.y + climb * climb * 0.16);
+        plane.scale.setScalar(0.45 + Math.min(0.35, climb * 0.05));
+        plane.rotation.z = Math.min(0.25, climb * 0.1);
+      } else plane.position.copy(start).addScaledVector(direction, f * reach * 2);
+      plane.rotation.y = Math.atan2(-direction.z, direction.x);
+      if (f < 1) return false;
+      this.root.remove(plane);
+      disposeObject(plane);
+      this.airborne--;
+      return true;
+    });
+  }
+
+  // ---------- households ----------
+  /** Offline: a family packs up and leaves; their home goes dark with a sign out front. */
+  private moveOut(historical: boolean) {
+    const homes = this.tiles.filter(tile => tile.building && tile.kind === "house" && !tile.building.userData.vacant && tile.building.userData.collapse === undefined);
+    const vacant = this.tiles.filter(tile => tile.building?.userData.vacant).length;
+    if (!homes.length || vacant >= Math.ceil((homes.length + vacant) * 0.6)) return;
+    // Outskirts empty first: people drift away from the edges of town.
+    const hearth = this.hearthTile;
+    homes.sort((a, b) => (hearth ? Math.hypot(b.x - hearth.x, b.z - hearth.z) - Math.hypot(a.x - hearth.x, a.z - hearth.z) : 0) + (this.random() - 0.5) * 2);
+    const tile = homes[0];
+    const building = tile.building!;
+    building.userData.vacant = true;
+    const sign = new Group();
+    sign.userData.keep = true;
+    sign.userData.vacancySign = true;
+    const post = new Mesh(new BoxGeometry(0.02, 0.22, 0.02), mat(0x5a3f2a, 1));
+    post.position.y = 0.11;
+    const board = new Mesh(new BoxGeometry(0.16, 0.09, 0.012), mat(this.technologyEra >= 4 ? 0xd9342b : 0xc9b38a, 0.8));
+    board.position.y = 0.2;
+    const stripe = new Mesh(new BoxGeometry(0.12, 0.018, 0.014), mat(0xf4ecd8, 0.8));
+    stripe.position.y = 0.2;
+    sign.add(post, board, stripe);
+    sign.position.set(0.32, 0, 0.4);
+    building.add(sign);
+    if ((building.userData.wear ?? 0) < 1) this.setWear(tile, 1);
+    this.streetsDirty = true;
+    if (historical) return;
+    // Boxes carried out to the street.
+    for (let i = 0; i < 8; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.5, 0.15, 0.45)), [0xb08a5a, 0xc9a26a][i % 2], 0.05, 1.4, new Vector3((this.random() - 0.5) * 0.4, 0.6, 0.8), 1.2, true);
+    this.onNotice?.({ kind: "moveOut", user: "", at: tile.group.position.clone() });
+  }
+
+  /** Back online: a family moves home again, the sign comes down and the lights come on. */
+  private moveIn(historical: boolean) {
+    const tile = this.tiles.find(candidate => candidate.building?.userData.vacant);
+    if (!tile) return;
+    const building = tile.building!;
+    building.userData.vacant = false;
+    const sign = building.children.find(child => child.userData.vacancySign);
+    if (sign) { building.remove(sign); disposeObject(sign); }
+    this.streetsDirty = true;
+    if (historical) return;
+    for (let i = 0; i < 10; i++) this.puff(tile.group.position.clone().add(new Vector3((this.random() - 0.5) * 0.6, 0.4 + this.random() * 0.5, (this.random() - 0.5) * 0.6)), i % 2 ? 0xffe08a : 0x9ff0b8, 0.035, 0.9, new Vector3(0, 0.8, 0), 0.4);
+    this.onNotice?.({ kind: "moveIn", user: "", at: tile.group.position.clone() });
+  }
+
   private meteorStrike(target: Vector3, onImpact: () => void, scale = 1) {
     const rock = new Group();
     rock.scale.setScalar(scale);
@@ -1808,10 +2460,11 @@ export class ChatCity {
   }
 
   /** A buzzing swarm sweeps in and gnaws buildings down to rubble. */
-  private locustSwarm(target: Vector3, damage: Tile[], scale = 1) {
+  private locustSwarm(target: Vector3, damage: Tile[], scale = 1, drones = false) {
     const bugs: Mesh[] = [];
-    const bugMat = mat(0x2a2a1e, 0.8);
-    const geometry = new BoxGeometry(0.05, 0.03, 0.08);
+    // Rogue AI: the same swarm, but glowing red machine drones.
+    const bugMat = drones ? mat(0x30353a, 0.4, { emissive: 0xff2a2a, emissiveIntensity: 1.6 }) : mat(0x2a2a1e, 0.8);
+    const geometry = drones ? new BoxGeometry(0.09, 0.025, 0.09) : new BoxGeometry(0.05, 0.03, 0.08);
     const entry = target.clone().add(new Vector3(this.activeRadius + 4, 1.6, -this.activeRadius));
     for (let i = 0; i < Math.round(90 * scale); i++) {
       const bug = new Mesh(geometry, bugMat);
@@ -1889,7 +2542,9 @@ export class ChatCity {
 
   apply(event: SimEvent, historical = false) {
     if (event.type === "advancement") { this.unlockTechnology(event.era); if (!historical) this.celebrate(); }
+    else if (event.type === "regression") this.loseEra(event.era, historical);
     else if (event.type === "build") this.build(event.kind, event.count, historical, event.builders);
+    else if (event.type === "rebuild") this.rebuild(event.count, historical, event.builders);
     else if (event.type === "command") this.runCommand(event, historical);
     else if (event.type === "capitol") this.setCapitol(event.stage, event.donors, historical);
     else if (event.type === "homeUpgrade") this.upgradeHome(event.owner, event.level, event.color, historical);
@@ -1897,12 +2552,15 @@ export class ChatCity {
     else if (event.type === "disaster") this.disaster(event.intensity, historical, event.damageCount, event.durationMs, event.kind);
     else if (event.type === "effect" && !historical) { this.fireworks(this.focus.x, this.focus.z, event.intensity); this.life.cheer(3); }
     else if (event.type === "decay") for (let i = 0; i < event.count; i++) this.wearDown(historical, event.gentle);
+    else if (event.type === "moveOut") for (let i = 0; i < event.count; i++) this.moveOut(historical);
+    else if (event.type === "moveIn") for (let i = 0; i < event.count; i++) this.moveIn(historical);
     else if (event.type === "chapter") this.raiseMonument(event.number, event.title, event.hero, historical);
     else if (event.type === "welcome" && !historical) { this.life.cheer(4); this.onNotice?.({ kind: "welcome", user: "", level: Math.round(event.awayHours) }); }
     else if (event.type === "repair") for (let i = 0; i < event.count; i++) { const at = this.repairOne(historical); if (event.by && at && !historical) this.onNotice?.({ kind: "repair", user: event.by, at }); }
   }
 
   private updateBuildings(delta: number) {
+    this.updateRebuilds(delta);
     for (const tile of this.tiles) {
       if (tile.revealing) {
         tile.revealElapsed = (tile.revealElapsed ?? 0) + delta;
@@ -1967,13 +2625,15 @@ export class ChatCity {
         });
         const light = building.userData.light as PointLight | undefined;
         if (light) light.intensity = 1.55 + 0.45 * Math.sin(performance.now() * 0.012 + tile.x);
-        if (tile.burningUntil && performance.now() >= tile.burningUntil && building.userData.collapse === undefined) building.userData.collapse = 0;
+        if (tile.burningUntil && performance.now() >= tile.burningUntil && building.userData.collapse === undefined) { building.userData.collapse = 0; building.userData.leavesRubble = true; }
       }
     }
   }
 
   private destroyBuilding(tile: Tile) {
     if (tile.building) {
+      tile.formerKind = tile.kind === "landmark" ? "landmark" : tile.kind === "fire" ? tile.formerKind ?? "house" : "house";
+      tile.formerOwner = tile.building.userData.owner as string | undefined;
       this.releaseLight(tile.building.userData.light as PointLight | undefined);
       tile.group.remove(tile.building);
       disposeObject(tile.building);
@@ -2012,8 +2672,21 @@ export class ChatCity {
   }
 
 
+  /** While a late joiner rebuilds the city's past, frames are skipped entirely. */
+  private catchingUp = false;
+  /** Merges quiet regions of finished buildings so a grown city stays cheap to draw on stream. */
+  private merger = new StaticMerger(this.root, () => {
+    const moving = new Set<Object3D>();
+    for (const { part } of this.animated) if (part.kind !== "smoke") moving.add(part.object);
+    return moving;
+  });
+  setCatchingUp(on: boolean) {
+    this.catchingUp = on;
+    if (!on) { this.previousFrame = performance.now(); this.frameBudget = 0; this.shadowsDirty = true; }
+  }
+
   private animate = () => {
-    if (this.destroyed) return;
+    if (this.destroyed || this.catchingUp) return;
     const now = performance.now();
     // Overlays cap the frame rate: a 30 fps city is plenty over a 30/60 fps stream and halves GPU work.
     this.frameBudget += now - this.previousFrame;
@@ -2031,7 +2704,10 @@ export class ChatCity {
     this.birdClock -= delta;
     if (this.birdClock <= 0) { this.birdClock = 25 + this.random() * 30; if (!this.asleep && this.nightGlow < 0.9) this.launchBirds(); }
     if (this.streetsDirty) this.rebuildStreets();
+    if (this.merger.update(this.tiles, now)) this.shadowsDirty = true;
     this.updateCampfire(delta);
+    this.updateSky(delta);
+    this.updateAirTraffic(delta);
     this.life.update(delta);
     // Effects may schedule more effects (bolts, craters) while running; collect those too.
     const running = this.effects;
@@ -2043,18 +2719,40 @@ export class ChatCity {
     const jolt = this.shake * this.shake * 0.5;
     this.viewAngle += (this.targetViewAngle - this.viewAngle) * (1 - Math.exp(-7 * delta));
     if (Math.abs(this.targetViewAngle - this.viewAngle) < 0.0005) this.viewAngle = this.targetViewAngle;
+    this.updateViewerCamera(delta);
     const cos = Math.cos(this.viewAngle), sin = Math.sin(this.viewAngle);
     const baseX = this.cameraBase.x * cos - this.cameraBase.z * sin, baseZ = this.cameraBase.x * sin + this.cameraBase.z * cos;
-    this.camera.position.set(baseX + (Math.random() - 0.5) * jolt, this.cameraBase.y + (Math.random() - 0.5) * jolt, baseZ + (Math.random() - 0.5) * jolt);
-    this.camera.lookAt(0, 0, 0);
+    this.camera.position.set(this.pan.x + baseX + (Math.random() - 0.5) * jolt, this.cameraBase.y + (Math.random() - 0.5) * jolt, this.pan.z + baseZ + (Math.random() - 0.5) * jolt);
+    this.camera.lookAt(this.pan.x, 0, this.pan.z);
     if (this.groundDirty) {
       this.ground.instanceMatrix.needsUpdate = true;
       if (this.ground.instanceColor) this.ground.instanceColor.needsUpdate = true;
       this.groundDirty = false;
     }
-    if (this.shadowsDirty) { this.renderer.shadowMap.needsUpdate = true; this.shadowsDirty = false; }
+    // Moving construction and burning buildings can dirty shadows every frame. Updating the full
+    // 2048² shadow map at render rate is expensive, so refresh it at most 10 times per second.
+    if (this.shadowsDirty && now - this.lastShadowUpdate >= ChatCity.SHADOW_UPDATE_MS) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.shadowsDirty = false;
+      this.lastShadowUpdate = now;
+    }
     if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
   };
+
+  /** Screen point over a random building or villager that is actually on screen. */
+  scatterPoint() {
+    const rect = this.host.getBoundingClientRect();
+    const built = this.tiles.filter(tile => tile.building && tile.group.visible);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const world = built.length && this.random() < 0.75
+        ? built[Math.floor(this.random() * built.length)].group.position.clone().setY(0.5 + this.random() * 0.4)
+        : this.life.speakerPosition()?.setY(0.2);
+      if (!world) continue;
+      const point = this.screenPoint(world);
+      if (point.x > rect.left + 80 && point.x < rect.right - 80 && point.y > rect.top + 70 && point.y < rect.bottom - 170) return point;
+    }
+    return undefined;
+  }
 
   speakerPoint() {
     const at = this.life.speakerPosition();
@@ -2067,6 +2765,106 @@ export class ChatCity {
     this.targetViewAngle += steps * Math.PI / 2;
   }
   get viewDirection() { return this.viewQuarter; }
+
+  // ---------- viewer camera: zoom, pan, follow ----------
+
+  private updateViewerCamera(delta: number) {
+    if (this.follow) this.targetPan.set(this.focus.x, 0, this.focus.z);
+    this.clampPan(this.targetPan);
+    const ease = 1 - Math.exp(-10 * delta);
+    this.pan.lerp(this.targetPan, ease);
+    const zoom = this.userZoom + (this.targetUserZoom - this.userZoom) * ease;
+    if (Math.abs(zoom - this.userZoom) > 1e-5) {
+      this.userZoom = Math.abs(this.targetUserZoom - zoom) < 1e-4 ? this.targetUserZoom : zoom;
+      this.camera.zoom = 1.18 * this.zoom * this.userZoom;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** Keep the camera over the island: the further in you zoom, the further you may roam. */
+  private clampPan(pan: Vector3) {
+    pan.y = 0;
+    const limit = this.activeRadius + 3;
+    const length = Math.hypot(pan.x, pan.z);
+    if (length > limit) pan.multiplyScalar(limit / length);
+  }
+
+  /** The ground point under a CSS pixel position (client coordinates), for the current camera. */
+  groundAt(clientX: number, clientY: number) {
+    const rect = this.host.getBoundingClientRect();
+    const ndc = new Vector3((clientX - rect.left) / rect.width * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1, -1);
+    const origin = ndc.clone().unproject(this.camera);
+    const direction = new Vector3();
+    this.camera.getWorldDirection(direction);
+    if (Math.abs(direction.y) < 1e-6) return undefined;
+    const t = -origin.y / direction.y;
+    return origin.addScaledVector(direction, t).setY(0);
+  }
+
+  /** Zoom by a factor, keeping the ground point under the cursor fixed when one is given. */
+  zoomBy(factor: number, clientX?: number, clientY?: number) {
+    const next = Math.min(ChatCity.MAX_ZOOM, Math.max(ChatCity.MIN_ZOOM, this.targetUserZoom * factor));
+    if (next === this.targetUserZoom) return;
+    if (clientX !== undefined && clientY !== undefined) {
+      const anchor = this.groundAt(clientX, clientY);
+      if (anchor) {
+        // In an orthographic view the anchor's offset from the centre scales with 1/zoom.
+        this.follow = false;
+        const keep = this.userZoom / next;
+        this.targetPan.set(anchor.x - (anchor.x - this.pan.x) * keep, 0, anchor.z - (anchor.z - this.pan.z) * keep);
+      }
+    }
+    this.targetUserZoom = next;
+  }
+
+  /** Drag the ground from one screen point to another (1:1 under the cursor). */
+  dragPan(fromX: number, fromY: number, toX: number, toY: number) {
+    const from = this.groundAt(fromX, fromY), to = this.groundAt(toX, toY);
+    if (!from || !to) return;
+    this.follow = false;
+    this.pan.sub(to).add(from);
+    this.clampPan(this.pan);
+    this.targetPan.copy(this.pan);
+  }
+
+  /** Move the view in screen directions (right, up), in world units scaled by the zoom. */
+  panBy(right: number, up: number) {
+    this.follow = false;
+    const step = this.viewSpan / 2 / this.userZoom;
+    // Screen up is the camera's heading flattened onto the ground; screen right is perpendicular.
+    const heading = new Vector3();
+    this.camera.getWorldDirection(heading);
+    heading.setY(0).normalize();
+    const upX = heading.x, upZ = heading.z;
+    const rightX = -heading.z, rightZ = heading.x;
+    this.targetPan.x += (rightX * right + upX * up) * step;
+    this.targetPan.z += (rightZ * right + upZ * up) * step;
+  }
+
+  /** Smoothly glide to a world point and zoom in on it. */
+  lookAt(clientX: number, clientY: number, factor = 2) {
+    const point = this.groundAt(clientX, clientY);
+    if (!point) return;
+    this.follow = false;
+    this.targetPan.copy(point);
+    this.targetUserZoom = Math.min(ChatCity.MAX_ZOOM, Math.max(ChatCity.MIN_ZOOM, this.targetUserZoom * factor));
+  }
+
+  /** Follow the latest build or attack around the city. Returns whether following is now on. */
+  toggleFollow(on = !this.follow) {
+    this.follow = on;
+    if (on && this.targetUserZoom < 2) this.targetUserZoom = 2.5;
+    return this.follow;
+  }
+
+  resetView() {
+    this.follow = false;
+    this.targetPan.set(0, 0, 0);
+    this.targetUserZoom = 1;
+  }
+
+  get viewerZoom() { return this.targetUserZoom; }
+  get following() { return this.follow; }
 
   /** Project a world point to CSS pixels inside the host element. */
   screenPoint(world: Vector3) {
@@ -2081,6 +2879,7 @@ export class ChatCity {
     window.removeEventListener("resize", this.resize);
     this.resizeObserver?.disconnect();
     this.renderer.setAnimationLoop(null);
+    this.merger.dispose();
     this.renderer.dispose();
     this.host.removeChild(this.renderer.domElement);
   }

@@ -1,6 +1,8 @@
 import { Group, Vector3 } from "three";
 import type { Object3D } from "three";
 import { Batcher, block, coneGeo, cylinderGeo, place, prismGeo, pyramidGeo, sharedMat, sphereGeo, tint } from "./kit.js";
+import * as future from "./future.js";
+import * as bustle from "./bustle.js";
 import type { CityTheme, CityThemeId } from "./theme.js";
 
 type Random = () => number;
@@ -16,6 +18,11 @@ export type SpecialStyle =
   | "windmill" | "smithy" | "fountain" | "watchtower"
   | "factory" | "waterTower" | "gasStation" | "arcade"
   | "radioTower" | "turbines" | "dataCenter" | "stadium" | "solarFarm"
+  // Kardashev eras
+  | "airport" | "mall"
+  | "launchPad" | "fusionReactor" | "weatherSpire" | "maglevHub"
+  | "beamCollector" | "habitatPark" | "starForge"
+  | "stargate" | "monolith" | "crystalSpire"
   // Theme-specific stand-ins
   | "obelisk" | "shrine" | "runestone" | "torii" | "granary" | "aqueduct" | "waterwheel" | "oasis" | "koiPond";
 
@@ -31,9 +38,12 @@ export const SPECIALS_BY_ERA: SpecialStyle[][] = [
   ["well", "stall", "totem"],
   ["windmill", "smithy", "fountain", "watchtower", "stall"],
   ["windmill", "smithy", "fountain", "watchtower"],
-  ["factory", "waterTower", "gasStation", "arcade", "fountain"],
-  ["radioTower", "turbines", "dataCenter", "stadium", "arcade", "gasStation"],
-  ["radioTower", "turbines", "dataCenter", "stadium", "solarFarm"]
+  ["factory", "waterTower", "gasStation", "arcade", "fountain", "airport"],
+  ["radioTower", "turbines", "dataCenter", "stadium", "arcade", "gasStation", "airport", "mall"],
+  ["radioTower", "turbines", "dataCenter", "stadium", "solarFarm", "mall", "airport"],
+  ["launchPad", "fusionReactor", "weatherSpire", "maglevHub", "dataCenter"],
+  ["beamCollector", "habitatPark", "starForge", "launchPad", "fusionReactor"],
+  ["stargate", "monolith", "crystalSpire", "starForge", "beamCollector", "habitatPark"]
 ];
 
 /**
@@ -54,7 +64,7 @@ export class SpecialKit {
   private keep<T extends Object3D>(object: T) { object.userData.keep = true; return object; }
 
   choose(era: number): SpecialStyle {
-    const pool = SPECIALS_BY_ERA[Math.max(0, Math.min(6, era))];
+    const pool = SPECIALS_BY_ERA[Math.max(0, Math.min(SPECIALS_BY_ERA.length - 1, era))];
     const fresh = pool.filter(style => !this.recent.includes(style));
     const style = this.pick(fresh.length ? fresh : pool);
     this.recent.push(style);
@@ -73,6 +83,22 @@ export class SpecialKit {
     building.userData.style = style;
     return animated;
   }
+
+  // ---------- bustle (see bustle.ts) ----------
+  private airport(b: Group, a: Animated[], batch: Batcher, era: number) { bustle.airport(b, a, this.theme, this.random, batch, era); }
+  private mall(b: Group, a: Animated[], batch: Batcher) { bustle.mall(b, a, this.theme, this.random, batch); }
+
+  // ---------- Kardashev eras (see future.ts) ----------
+  private launchPad(b: Group, a: Animated[]) { future.launchPad(b, a, this.theme, this.random); }
+  private fusionReactor(b: Group, a: Animated[]) { future.fusionReactor(b, a, this.theme); }
+  private weatherSpire(b: Group, a: Animated[]) { future.weatherSpire(b, a, this.theme); }
+  private maglevHub(b: Group, a: Animated[], batch: Batcher) { future.maglevHub(b, a, this.theme, this.random, batch); }
+  private beamCollector(b: Group, a: Animated[]) { future.beamCollector(b, a, this.theme); }
+  private habitatPark(b: Group, a: Animated[]) { future.habitatPark(b, a, this.theme, this.random); }
+  private starForge(b: Group, a: Animated[]) { future.starForge(b, a, this.theme); }
+  private stargate(b: Group, a: Animated[]) { future.stargate(b, a, this.theme); }
+  private monolith(b: Group, a: Animated[]) { future.monolith(b, a, this.theme, this.random); }
+  private crystalSpire(b: Group, a: Animated[]) { future.crystalSpire(b, a, this.theme, this.random); }
 
   // ---------- village ----------
   private well(b: Group, a: Animated[]) {

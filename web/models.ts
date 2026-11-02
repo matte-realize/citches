@@ -171,12 +171,14 @@ function wheel(parent: Group, x: number, z: number, radius: number) {
 /** Cars face +z so `rotation.y = atan2(dx, dz)` points them along the lane. Wheels touch y=0. */
 export function makeCar(random: Random, era: number, theme: CityTheme): VehicleModel {
   const root = new Group();
-  const style = era >= 5 ? pick(random, ["sedan", "sedan", "taxi", "van", "sport"] as const) : pick(random, ["vintage", "vintage", "pickup", "van"] as const);
+  const style = era >= 5 ? pick(random, ["sedan", "sedan", "taxi", "van", "sport", "delivery", "delivery"] as const)
+    : era >= 4 ? pick(random, ["vintage", "vintage", "pickup", "van", "delivery"] as const)
+    : pick(random, ["vintage", "vintage", "pickup", "van"] as const);
   const paintColor = style === "taxi" ? 0xf0c330 : random() < 0.2 ? theme.accent : pick(random, CAR_PAINT);
   const paint = sharedMat(paintColor, 0.35, { metalness: 0.35 });
   const glass = sharedMat(0x26343d, 0.15, { metalness: 0.5 });
   const r = 0.045;
-  const length = style === "van" ? 0.5 : style === "sport" ? 0.46 : 0.48;
+  const length = style === "delivery" ? 0.58 : style === "van" ? 0.5 : style === "sport" ? 0.46 : 0.48;
   const width = 0.25;
   block(root, width, 0.085, length, 0, r + 0.045, 0, paint);
   if (style === "vintage") {
@@ -190,6 +192,13 @@ export function makeCar(random: Random, era: number, theme: CityTheme): VehicleM
     block(root, width * 0.92, 0.1, length * 0.34, 0, r + 0.13, length * 0.08, glass);
     block(root, width * 0.96, 0.025, length * 0.36, 0, r + 0.19, length * 0.08, paint);
     block(root, width, 0.06, length * 0.4, 0, r + 0.115, -length * 0.28, sharedMat(0x5b4430, 1));
+  } else if (style === "delivery") {
+    // Box truck: short cab up front, tall cargo box with a company stripe.
+    block(root, width * 0.94, 0.1, length * 0.26, 0, r + 0.13, length * 0.36, paint);
+    block(root, width * 0.95, 0.05, 0.012, 0, r + 0.15, length * 0.49, glass, 0, false);
+    const boxColor = pick(random, [0xf4f2ea, 0xf4f2ea, 0xe9c46a, 0xd8dcd8] as const);
+    block(root, width * 1.02, 0.22, length * 0.68, 0, r + 0.2, -length * 0.14, sharedMat(boxColor, 0.6));
+    block(root, width * 1.03, 0.04, length * 0.6, 0, r + 0.2, -length * 0.14, sharedMat(pick(random, [0xd9534f, 0x3f8fd2, 0x4fae6a, theme.accent] as const), 0.5));
   } else if (style === "van") {
     block(root, width * 0.96, 0.16, length * 0.8, 0, r + 0.165, -length * 0.06, paint);
     block(root, width * 0.97, 0.07, length * 0.7, 0, r + 0.18, -length * 0.06, glass);

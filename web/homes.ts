@@ -2,12 +2,15 @@ import { Group } from "three";
 import type { Material } from "three";
 import { Batcher, block, coneGeo, cylinderGeo, place, prismGeo, pyramidGeo, sharedMat, sphereGeo, tint } from "./kit.js";
 import type { CityTheme, CityThemeId } from "./theme.js";
+import * as future from "./future.js";
+import * as bustle from "./bustle.js";
 import { addGadgets } from "./specials.js";
 
 type Random = () => number;
 export type HomeStyle =
   | "cottage" | "courtyard" | "rowhouses" | "tower" | "farmstead" | "signature"
-  | "apartment" | "walkup" | "setback" | "round" | "villa" | "gardenTower";
+  | "apartment" | "walkup" | "setback" | "round" | "villa" | "gardenTower"
+  | "arcology" | "domeHome" | "podTower" | "shopfront";
 
 const FLOWERS = [0xe46a8a, 0xf2c94c, 0xf08a4b, 0xb98be0, 0xf5f0e6];
 const DOORS = [0x624737, 0x3f5d6b, 0x7a3b32, 0x4c5e3b, 0x2f2a28, 0x8a6a3a];
@@ -32,9 +35,11 @@ export class HomeKit {
   private door() { return sharedMat(this.random() < 0.3 ? this.theme.accent : this.pick(DOORS), 0.9); }
 
   chooseStyle(era: number): HomeStyle {
-    const pool: HomeStyle[] = era <= 3
-      ? ["cottage", "courtyard", "rowhouses", "tower", "signature", "signature", ...(era === 2 ? ["farmstead", "cottage"] as HomeStyle[] : ["tower", "rowhouses"] as HomeStyle[])]
-      : ["apartment", "walkup", "setback", "round", "villa", "rowhouses", ...(era >= 5 ? ["gardenTower", "villa"] as HomeStyle[] : ["walkup"] as HomeStyle[])];
+    const pool: HomeStyle[] = era >= 7
+      ? ["arcology", "domeHome", "podTower", "gardenTower", ...(era >= 8 ? ["arcology", "domeHome", "podTower"] as HomeStyle[] : ["setback", "villa"] as HomeStyle[])]
+      : era <= 3
+      ? ["cottage", "courtyard", "rowhouses", "tower", "signature", "signature", "shopfront", ...(era === 2 ? ["farmstead", "cottage"] as HomeStyle[] : ["tower", "rowhouses", "shopfront"] as HomeStyle[])]
+      : ["apartment", "walkup", "setback", "round", "villa", "rowhouses", "shopfront", "shopfront", ...(era >= 5 ? ["gardenTower", "villa"] as HomeStyle[] : ["walkup"] as HomeStyle[])];
     const fresh = pool.filter(style => !this.recent.includes(style));
     const style = this.pick(fresh.length ? fresh : pool);
     this.recent.push(style);
@@ -61,6 +66,10 @@ export class HomeKit {
       case "round": this.round(ctx); break;
       case "villa": this.villa(ctx); break;
       case "gardenTower": this.gardenTower(ctx); break;
+      case "arcology": future.arcology(building, windows, this.theme, this.random, era); break;
+      case "domeHome": future.domeHome(building, windows, this.theme, this.random); break;
+      case "podTower": future.podTower(building, windows, this.theme, this.random); break;
+      case "shopfront": bustle.shopfront(building, windows, this.theme, this.random, era, () => this.wall(), () => this.roofMat()); break;
     }
     windows.flush(building);
     building.userData.style = style;
