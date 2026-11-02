@@ -1,0 +1,5 @@
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0b1018; cursor: none; }
+* { cursor: none !important; }
+#sky { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; }
+/* The logo and tagline are drawn on the canvas; these stay for screen readers only. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
