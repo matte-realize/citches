@@ -1,6 +1,11 @@
-# Chat City
+# Citches: the city made from your chat
 
-A Twitch chat driven isometric civilization. The city begins around a shared founding hall on a small plot, then expands outward as the community builds a lasting, positive, expressive stream together. Live chat and JSONL replay use the same message-source interface and WebSocket event protocol.
+Citches (built as "Chat City") is a Twitch chat driven isometric civilization. The city begins around a shared campfire on a small plot, then expands outward as the community builds a lasting, positive, expressive stream together. Kind, funny and curious chat builds it; spam and toxicity attack it, and the community defends it together. Live chat and JSONL replay use the same message-source interface and WebSocket event protocol.
+
+## Try it in two minutes
+
+1. **On real Twitch chat (no stream needed):** `npm install && npm run build:extension`, load `extension-dist/` in `chrome://extensions` (Developer mode, Load unpacked), then open any live channel on twitch.tv. The city builds from that channel's public chat in the corner of the player. See [Browser extension](#browser-extension-any-twitch-stream).
+2. **No live channel handy:** `npm install && npm run dev:web`, then open `http://localhost:5173/?demo=4`. Simulated chat runs through the real scoring pipeline, with chat commands, troll waves and level-ups. Add `&levelup=12` to reach new eras within a minute or two.
 
 ## Run
 
@@ -119,6 +124,26 @@ For the overlay to work live, the backend acts as the Extension Backend Service:
 - Set `TWITCH_EXT_CLIENT_ID`, `TWITCH_EXT_SECRET` (the base64 extension secret), `TWITCH_EXT_OWNER_ID`, and `TWITCH_BROADCASTER_ID`. The backend then signs extension JWTs and broadcasts batched ticks through Extension PubSub (at most one message per second, under 5 KB).
 - The backend serves `GET /snapshot` on the WebSocket port, so viewers who join late rebuild the same city. Expose it over HTTPS and put `{"ebsUrl":"https://…"}` in the extension's broadcaster configuration, or pass `?ebs=` while testing.
 - `npm run build:web` produces relative-path assets in `dist/` that can be zipped and uploaded as the extension's hosted files. Fonts are bundled locally rather than loaded from a CDN.
+
+## Recording the demo video
+
+Options for the web app that make clean recordings. They only affect the page you open.
+
+| Parameter | Effect |
+| --- | --- |
+| `?demo=<speed>` | Simulated chat at that speed (1 = normal, 4 = four times as busy) |
+| `&levelup=<n>` | Demo eras come n times faster (12 shows several level-ups in two minutes) |
+| `&delay=<seconds>` | Hold the simulated chat back, so the campfire sits quiet first |
+| `&intro` | Opening shot: fade up on the campfire, hold, then pull back to the empty plot before chat starts |
+| `?idle` | No chat at all, just the founding campfire |
+| `&clean` | Hide every panel and button, leaving only the city |
+| `&hour=14` | Fix the time of day (otherwise lighting follows the viewer's clock) |
+
+Demo and idle pages hide the mouse pointer. `/endcard.html` is the pixel-art end card (`?still` shows the finished frame; `R` or a click replays it). Overlay pages also have a spotlight: big moments (a new era, a big attack, the haters washed out, a raid) pull the corner city to the middle of the stream for a few seconds; `C` pins it by hand and `?spotlight=0` turns it off.
+
+## How it was built
+
+Citches was built during the Codex x TwitchCon Hackathon with OpenAI Codex. Codex built the foundation: live Twitch chat ingestion, the scoring pipeline, JSONL replay, the isometric renderer, the civilization themes and the community growth, milestone and recovery systems (Codex session `01a18d24-afcf-7bf2-a854-c4cc368336bb`). Some later features were developed with Claude Code.
 
 ## Data and tuning
 
