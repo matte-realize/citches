@@ -74,7 +74,7 @@ export class TwitchChatClient {
 }
 
 interface SavedCity { version: 1; mapper: MapperState; events: SimEvent[]; savedAt: number }
-type StorageArea = { get(key: string): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void> };
+type StorageArea = { get(key: string): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void>; remove(key: string): Promise<void> };
 const extensionStorage = (): StorageArea | undefined => (globalThis as { chrome?: { storage?: { local?: StorageArea } } }).chrome?.storage?.local;
 const MAX_SAVED_EVENTS = 4000;
 
@@ -89,7 +89,21 @@ export class TwitchChatFeed implements CityFeed {
   private history: SimEvent[] = [];
   private mapper = new EventMapper();
   private dirty = false;
+  private wiped = false;
   constructor(private channel: string) {}
+
+  /** Testing reset: stop saving, forget this channel's city entirely. The caller reloads. */
+  async wipe() {
+    this.wiped = true;
+    if (this.saveTimer) clearInterval(this.saveTimer);
+    this.aggregator?.stop();
+    this.client?.close();
+    try {
+      const area = extensionStorage();
+      if (area) await area.remove(this.key);
+      else localStorage.removeItem(this.key);
+    } catch { /* nothing saved */ }
+  }
 
   private get key() { return `city:${this.channel}`; }
 
@@ -102,7 +116,7 @@ export class TwitchChatFeed implements CityFeed {
   }
 
   private async save() {
-    if (!this.dirty) return;
+    if (!this.dirty || this.wiped) return;
     this.dirty = false;
     // Keep every milestone, trim the oldest construction so storage stays small.
     if (this.history.length > MAX_SAVED_EVENTS) {

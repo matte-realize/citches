@@ -9,6 +9,7 @@
     "dev:web": "vite --host 0.0.0.0",
     "build:web": "tsc -p web/tsconfig.json && vite build",
     "typecheck": "tsc --noEmit",
+    "bundle:extension": "vite build -c vite.extension.config.ts && vite build -c vite.extension-content.config.ts",
     "build:extension": "tsc -p web/tsconfig.json && tsc -p extension/tsconfig.json && vite build -c vite.extension.config.ts && vite build -c vite.extension-content.config.ts",
     "calibrate": "node --import tsx/esm src/calibrate.ts"
   },
