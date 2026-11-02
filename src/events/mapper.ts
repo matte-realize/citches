@@ -2,6 +2,17 @@ import { config } from "../config.js";
 import type { GrowthSignals } from "../aggregate/aggregator.js";
 import type { Aggregate, AttackKind, ChatCommand, ChronicleEntry, CommunityProgress, Counts, ScoreSnapshot, SimEvent } from "../types.js";
 
+/** Local calendar day (YYYY-MM-DD) of a timestamp, in this machine's time zone. */
+const NATURAL_REASON: Partial<Record<AttackKind, string>> = {
+  quake: "EARTHQUAKE", flood: "FLASH FLOOD", tornado: "TORNADO", fire: "WILDFIRE", storm: "SUPERSTORM",
+  flare: "SOLAR FLARE", asteroid: "ASTEROID", drones: "ROGUE AI", gamma: "GAMMA-RAY BURST", blackhole: "BLACK HOLE"
+};
+
+function localDay(at: number) {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 const CHAPTER_TITLES: Record<string, string[]> = {
   built: ["The Building Boom", "Rise of the Neighbourhoods", "The Cranes Arrive", "A City of Many Hands", "New Streets, New Faces"],
   repaired: ["The Great Restoration", "Hammers and Hope", "Mending the Streets", "Fixing What Was Broken"],
@@ -9,11 +20,12 @@ const CHAPTER_TITLES: Record<string, string[]> = {
   washed: ["The Haters Washed Out", "Calm After the Storm", "Kindness Wins the Day"],
   eras: ["A New Age Dawns", "The Age of Wonders", "Leaps and Bounds"],
   capitol: ["The Hall Rises", "Heart of the City", "Stones of the Capitol"],
-  quiet: ["The Long Quiet", "Dust and Silence", "Waiting for Voices"]
+  quiet: ["The Long Quiet", "Dust and Silence", "Waiting for Voices"],
+  erasLost: ["The Fall", "A Dark Age", "What Was Lost"]
 };
 /** Name a chapter after what dominated it, weighted so rarer moments (eras, capitol) win ties. */
 function chapterTitle(tally: Record<string, number>, number: number) {
-  const weights: Record<string, number> = { built: 0.15, repaired: 0.6, attacks: 1.5, washed: 3, eras: 6, capitol: 5, quiet: 0.4 };
+  const weights: Record<string, number> = { built: 0.15, repaired: 0.6, attacks: 1.5, washed: 3, eras: 6, capitol: 5, quiet: 0.4, erasLost: 7 };
   const [kind] = Object.entries(tally).map(([key, count]) => [key, count * (weights[key] ?? 1)] as const).sort((a, b) => b[1] - a[1])[0] ?? ["built"];
   const options = CHAPTER_TITLES[kind] ?? CHAPTER_TITLES.built;
   return options[number % options.length];
@@ -37,18 +49,26 @@ export interface MapperState {
   scoreTotal: number; threat: number; snapshot: ScoreSnapshot;
   leaderboard?: Array<[string, number]>;
   outstandingWear?: number;
+  ruins?: number; rebuildProgress?: number;
   spent?: Array<[string, number]>;
   capitolFund?: number; capitolStage?: number; donors?: Array<[string, number]>;
   foundedAt?: number; chapter?: number; chapterPoints?: number; chronicle?: ChronicleEntry[]; lastMessageAt?: number; awakeSince?: number;
   owners?: Array<[string, number, string]>;
+  supporters?: Array<[string, number]>;
+  vacancies?: number; activeDays?: number; lastActiveDay?: string; totalMessages?: number; totalCounts?: Counts; everChatted?: number;
 }
 
 export class EventMapper {
   private sessionStartedAt?: number;
   private houseProgress = 0;
   private landmarkProgress = 0;
+  /** Buildings knocked down by attacks and disasters that chat has not rebuilt yet. */
+  private ruins = 0;
+  private rebuildProgress = 0;
   private technologyProgress = 0;
   private technologyEra = 0;
+  /** When the current era was reached (it can't be lost straight away). */
+  private advancedAt = -Infinity;
   private recoveryActive = false;
   private recoveryEra = 0;
   private recoveryProgress = 0;
@@ -57,13 +77,20 @@ export class EventMapper {
   private scoreTotal = 0;
   private threat = 0;
   private lastAttackAt = 0;
+  /** When the danger meter last filled; the attack strikes a short warning later. */
+  private massingSince?: number;
+  private strikeAt() { return Math.max((this.massingSince ?? 0) + config.threat.warningMs, this.lastAttackAt + config.threat.minGapMs); }
   private lastFireworksAt = 0;
   private recentMessages = 0;
+  /** Chat pace in messages per minute, smoothed over a few minutes so a spam burst is not "a big chat". */
+  private chatPerMinute = 0;
+  private paceAt?: number;
   private recentMinusMessages = 0;
   private peakThreatRatio = 0;
   private plusRate = 0; // exponentially weighted plus points per minute
   private typicalRate = 0; // the channel's normal pace, over a much longer window
   private decayProgress = 0;
+  private entropyProgress = 0;
   private repairProgress = 0;
   private outstandingWear = 0;
   private lastMessageAt?: number;
@@ -87,14 +114,27 @@ export class EventMapper {
   private recentChatters = new Map<string, number>();
   private awakeSince?: number;
   private foundedAt?: number;
+  /** Days the community actually showed up (distinct local calendar days with scored chat). */
+  private activeDays = 0;
+  private lastActiveDay?: string;
+  private totalMessages = 0;
+  private totalCounts: Counts = { RAID: 0, SPAM: 0, QUESTION: 0, HATE: 0, COMMENT: 0 };
+  private everChatted = 0;
+  private supporters = new Map<string, number>();
+  private vacancies = 0;
+  private moveOutProgress = 0;
+  private moveInProgress = 0;
+  private nextCatastropheAt?: number;
   private chapter = 0;
   private chapterPoints = 0;
   private chronicle: ChronicleEntry[] = [];
-  private tally = { built: 0, repaired: 0, attacks: 0, washed: 0, eras: 0, capitol: 0, quiet: 0 };
+  private tally = { built: 0, repaired: 0, attacks: 0, washed: 0, eras: 0, capitol: 0, quiet: 0, erasLost: 0 };
   private heroes = new Map<string, number>();
   private welcomeUntil = 0;
   private sleepWear = 0;
   private growthMultiplier = 1;
+  /** Demo only: speeds up era progress so a short recording can show level-ups. Live chat always uses 1. */
+  technologyBoost = 1;
   private capitolStage = 0;
   private donors = new Map<string, number>();
 
@@ -109,7 +149,7 @@ export class EventMapper {
   /** Serializable progress so a city can be saved and resumed (used by the browser extension). */
   exportState(): MapperState {
     return {
-      houseProgress: this.houseProgress, landmarkProgress: this.landmarkProgress,
+      houseProgress: this.houseProgress, landmarkProgress: this.landmarkProgress, ruins: this.ruins, rebuildProgress: this.rebuildProgress,
       technologyProgress: this.technologyProgress, technologyEra: this.technologyEra,
       recoveryActive: this.recoveryActive, recoveryEra: this.recoveryEra,
       recoveryProgress: this.recoveryProgress, recoveryGoal: this.recoveryGoal,
@@ -121,12 +161,14 @@ export class EventMapper {
       donors: [...this.donors].sort((a, b) => b[1] - a[1]).slice(0, 50),
       spent: [...this.spent].slice(-500),
       owners: [...this.owners].slice(-300).map(([name, owner]) => [name, owner.level, owner.color ?? ""] as [string, number, string]),
-      leaderboard: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 50)
+      leaderboard: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 50),
+      supporters: [...this.supporters].sort((a, b) => b[1] - a[1]).slice(0, 50),
+      vacancies: this.vacancies, activeDays: this.activeDays, lastActiveDay: this.lastActiveDay, totalMessages: this.totalMessages, totalCounts: this.totalCounts, everChatted: this.everChatted
     };
   }
 
   importState(state: Partial<MapperState>) {
-    const numbers = ["houseProgress", "landmarkProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat", "outstandingWear", "capitolFund", "capitolStage", "foundedAt", "chapter", "chapterPoints", "lastMessageAt", "awakeSince"] as const;
+    const numbers = ["houseProgress", "landmarkProgress", "ruins", "rebuildProgress", "technologyProgress", "technologyEra", "recoveryEra", "recoveryProgress", "recoveryGoal", "scoreTotal", "threat", "outstandingWear", "capitolFund", "capitolStage", "foundedAt", "chapter", "chapterPoints", "lastMessageAt", "awakeSince", "activeDays", "totalMessages", "everChatted", "vacancies"] as const;
     for (const key of numbers) if (typeof state[key] === "number" && Number.isFinite(state[key])) this[key] = state[key] as number;
     if (typeof state.recoveryActive === "boolean") this.recoveryActive = state.recoveryActive;
     if (state.snapshot) this.snapshot = { ...state.snapshot, pops: [] };
@@ -135,6 +177,12 @@ export class EventMapper {
     if (Array.isArray(state.spent)) this.spent = new Map(state.spent.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
     if (Array.isArray(state.owners)) for (const [name, level, color] of state.owners) if (typeof name === "string") this.owners.set(name, { level: Number(level) || 0, lastSeen: 0, earned: 0, color: color || undefined });
     if (Array.isArray(state.leaderboard)) this.leaderboard = new Map(state.leaderboard.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
+    if (Array.isArray(state.supporters)) this.supporters = new Map(state.supporters.filter(([name, points]) => typeof name === "string" && Number.isFinite(points)));
+    if (typeof state.lastActiveDay === "string") this.lastActiveDay = state.lastActiveDay;
+    if (state.totalCounts) for (const key of Object.keys(this.totalCounts) as Array<keyof Counts>) this.totalCounts[key] = Number(state.totalCounts[key]) || 0;
+    // Older saves only knew when the city was founded: count that as its first active day.
+    if (!this.activeDays && this.foundedAt !== undefined) this.activeDays = 1;
+    if (!this.everChatted) this.everChatted = this.leaderboard.size;
   }
 
   get progress(): CommunityProgress {
@@ -157,7 +205,8 @@ export class EventMapper {
         current: this.recoveryProgress,
         goal: this.recoveryGoal,
         ratio: this.recoveryGoal > 0 ? Math.min(1, this.recoveryProgress / this.recoveryGoal) : 0
-      }
+      },
+      repair: { ruins: Math.ceil(this.ruins), ratio: Math.min(1, this.rebuildProgress / this.repairCost()) }
     };
   }
 
@@ -166,10 +215,21 @@ export class EventMapper {
     const rateScale = Math.max(1, aggregate.messagesPerSecond / config.events.rateReference);
     const events: SimEvent[] = [];
     const growth = config.growth;
+    const paceSeconds = Math.min(5, (now - (this.paceAt ?? now)) / 1000);
+    this.paceAt = now;
+    const keepPace = Math.exp(-paceSeconds / config.threat.speedWindowSeconds);
+    this.chatPerMinute = this.chatPerMinute * keepPace + aggregate.messagesPerSecond * 60 * (1 - keepPace);
     this.sessionStartedAt ??= now;
     this.foundedAt ??= now;
     const wakeEvent = this.noteActivity(signals, now);
+    this.countActivity(delta, signals, now);
     if (wakeEvent) events.push(wakeEvent);
+    if (wakeEvent && this.vacancies > 0) {
+      // Coming back after a break: the first families return straight away.
+      const back = Math.min(this.vacancies, config.rest.welcomeMoveIns);
+      this.vacancies -= back;
+      events.push({ type: "moveIn", count: back });
+    }
     this.growthMultiplier = this.communityMultiplier(signals, now);
     const seconds = Math.min(5, (now - (this.lastTickAt ?? now)) / 1000);
     this.lastTickAt = now;
@@ -184,11 +244,18 @@ export class EventMapper {
       this.houseProgress += delta.COMMENT * pointsPerMessage;
       this.landmarkProgress += delta.QUESTION * pointsPerMessage;
       const technology = config.technology;
+      // Big chats advance faster, but with diminishing returns: past the reference pace every
+      // message counts for less, so 10x the chat is roughly 2.5x the progress, not 10x.
+      const perMinute = aggregate.messagesPerSecond * 60;
+      const volumeDamping = perMinute > technology.volumeReferencePerMinute
+        ? (technology.volumeReferencePerMinute / perMinute) ** technology.volumeDamping : 1;
+      // Positivity is net of negativity: each negative message cancels some positive ones.
+      const netPositive = Math.max(0, signals.positiveMessages - signals.minusMessages * technology.negativeOffset);
       this.technologyProgress += (
         eligible * technology.chatPoint
         + signals.complexityTotal * technology.complexityPoint
-        + signals.positiveMessages * technology.positivityPoint
-      ) * longevity * chatPace * this.growthMultiplier;
+        + netPositive * technology.positivityPoint
+      ) * longevity * this.growthMultiplier * volumeDamping * this.technologyBoost / Math.pow(config.catastrophes.progressDragPerEra, this.technologyEra);
     }
     this.houseProgress += signals.supportPoints * config.support.growthMultiplier * this.growthMultiplier;
     this.technologyProgress += signals.supportPoints * config.technology.supportPointMultiplier * this.growthMultiplier;
@@ -205,9 +272,8 @@ export class EventMapper {
       }
     }
 
-    // Minuses slow technology down, but never undo a milestone that was already reached.
-    const eraFloor = this.technologyEra > 0 ? config.technology.milestones[this.technologyEra - 1].points : 0;
-    this.technologyProgress = Math.max(eraFloor, this.technologyProgress + signals.minusPoints * config.threat.technologyPenalty);
+    // Minuses push technology back, and far enough back the city loses its era (see regress()).
+    this.technologyProgress = Math.max(0, this.technologyProgress + signals.minusPoints * config.threat.technologyPenalty);
     for (const [user, points] of Object.entries(signals.byUser)) {
       this.contributors.set(user, (this.contributors.get(user) ?? 0) + points);
       this.leaderboard.set(user, (this.leaderboard.get(user) ?? 0) + points);
@@ -224,10 +290,28 @@ export class EventMapper {
       && this.technologyProgress >= config.technology.milestones[this.technologyEra].points) {
       const milestone = config.technology.milestones[this.technologyEra];
       this.technologyEra++;
+      this.advancedAt = now;
       events.push({ type: "advancement", era: this.technologyEra, name: milestone.name });
     }
 
-    if (now - this.lastBuildAt >= growth.buildCooldownMs) {
+    if (this.ruins > 0) {
+      // Ruins first: new construction halts and all progress (plus extra for bits and subs) rebuilds.
+      const repair = config.repair;
+      this.rebuildProgress += this.houseProgress + this.landmarkProgress
+        + signals.supportPoints * config.support.growthMultiplier * repair.supportMultiplier * this.growthMultiplier;
+      this.houseProgress = 0;
+      this.landmarkProgress = 0;
+      const cost = this.repairCost();
+      if (now - this.lastBuildAt >= growth.buildCooldownMs && this.rebuildProgress >= cost) {
+        const count = Math.min(repair.maxPerPulse, Math.ceil(this.ruins), Math.floor(this.rebuildProgress / cost));
+        this.rebuildProgress -= count * cost;
+        this.ruins = Math.max(0, this.ruins - count);
+        this.lastBuildAt = now;
+        events.push({ type: "rebuild", count, builders: this.takeBuilders() });
+        // Leftover effort carries over to new construction once the last ruin is rebuilt.
+        if (this.ruins === 0) { this.houseProgress = this.rebuildProgress; this.rebuildProgress = 0; }
+      }
+    } else if (now - this.lastBuildAt >= growth.buildCooldownMs) {
       if (this.landmarkProgress >= growth.landmarkThreshold) {
         const count = Math.min(growth.maxBuildsPerPulse, Math.floor(this.landmarkProgress / growth.landmarkThreshold));
         this.landmarkProgress -= count * growth.landmarkThreshold;
@@ -263,15 +347,37 @@ export class EventMapper {
     }
     const attack = this.maybeAttack(now);
     if (attack) events.push(attack);
+    // A full meter is not a stuck meter: it is an attack massing at the gates, striking when the
+    // cooldown ends unless positive chat breaks it up first.
+    const massing = !attack && this.threat >= this.threshold;
+    // While an attack waits out the gap, the bar charges steadily toward it instead of sitting full;
+    // only the last few seconds are a countdown.
+    const until = massing ? Math.max(0, this.strikeAt() - now) : undefined;
+    const charge = massing ? Math.min(1, (now - this.lastAttackAt) / Math.max(1, this.strikeAt() - this.lastAttackAt)) : undefined;
+    this.snapshot = {
+      ...this.snapshot,
+      incomingMs: until !== undefined && until <= config.threat.warningMs ? until : undefined,
+      threatRatio: charge !== undefined ? Math.max(0.35, charge) : this.snapshot.threatRatio
+    };
+    if (!attack) {
+      const natural = this.maybeCatastrophe(now);
+      if (natural) events.push(natural);
+    }
+    const moving = this.updateHouseholds(signals, now, seconds);
+    if (moving) events.push(moving);
     const upkeep = this.updateUpkeep(signals, now, seconds);
     if (upkeep) events.push(upkeep);
     const capitol = this.growCapitol(signals);
     if (capitol) events.push(capitol);
+    for (const event of events) if (event.type === "disaster") this.loseTechnology((event.damageCount ?? 1) * config.technology.disasterLossShare);
+    events.push(...this.regress(now));
     for (const event of events) {
-      if (event.type === "build") this.tally.built += event.count;
+      if (event.type === "disaster") this.ruins = Math.min(config.repair.maxRuins, this.ruins + (event.damageCount ?? 1));
+      if (event.type === "build" || event.type === "rebuild") this.tally.built += event.count;
       else if (event.type === "repair") this.tally.repaired += event.count;
       else if (event.type === "disaster") this.tally.attacks++;
       else if (event.type === "advancement") this.tally.eras++;
+      else if (event.type === "regression") this.tally.erasLost++;
       else if (event.type === "capitol") this.tally.capitol++;
       else if (event.type === "decay") this.tally.quiet++;
     }
@@ -387,6 +493,87 @@ export class EventMapper {
     return breadth * this.fatigue(now);
   }
 
+  /** Kardashev tier: 0 up to Empire, then 1, 2, 3 for Type I, II, III. */
+  private get tier() { return Math.max(0, Math.min(3, this.technologyEra - 6)); }
+  /** How much worse trouble is now than at the start: later chapters and higher tiers. */
+  private dangerScale() {
+    const settings = config.catastrophes;
+    const story = Math.min(settings.maxEscalation, 1 + this.chapter * settings.escalationPerChapter);
+    return story * Math.pow(settings.dangerPerEra, this.technologyEra);
+  }
+  /** Bigger pulses as the city climbs: one more every three eras, two more per Kardashev tier. */
+  /**
+   * Faster chats take bigger hits: a 300 msg/min chat builds ten times as fast as a 30 msg/min one,
+   * so its attacks scale up too (square root of the pace ratio, capped) to still sting.
+   */
+  private speedScale() {
+    const threat = config.threat;
+    return Math.min(threat.maxSpeedScale, Math.max(1, Math.sqrt(this.chatPerMinute / threat.speedReferencePerMinute)));
+  }
+  private maxDestroys() { return config.threat.maxDestroysPerPulse + Math.floor(Math.min(6, this.technologyEra) / 3) + this.tier * 2; }
+
+  /**
+   * Natural disasters: no cause, no warning. Earthquakes, floods and tornadoes at first; solar
+   * flares, asteroids and rogue drones for a planetary civilisation; gamma bursts and black holes
+   * for a galactic one. Only while the community is here; a strong positive chat braces the city.
+   */
+  private maybeCatastrophe(now: number): SimEvent | undefined {
+    const settings = config.catastrophes;
+    const awake = this.lastMessageAt !== undefined && now - this.lastMessageAt < config.upkeep.pauseAfterSilenceMs;
+    const warmed = this.sessionStartedAt !== undefined && now - this.sessionStartedAt > settings.warmupMinutes * 60_000;
+    const schedule = () => {
+      const [low, high] = settings.minutesBetween;
+      this.nextCatastropheAt = now + (low + Math.random() * (high - low)) * settings.gapScale[this.tier] * 60_000;
+    };
+    if (this.nextCatastropheAt === undefined) schedule();
+    // Asleep, the clock simply waits: nothing natural strikes an empty city.
+    if (!awake || !warmed) { if (this.nextCatastropheAt! < now) this.nextCatastropheAt = now + 60_000; return undefined; }
+    if (now < this.nextCatastropheAt! || now - this.lastAttackAt < config.threat.cooldownMs / 2) return undefined;
+    schedule();
+    const tier = this.tier;
+    const pools: AttackKind[][] = [
+      ["quake", "flood", "tornado", "fire", "storm"],
+      ["quake", "flood", "tornado", "flare", "asteroid", "drones"],
+      ["flare", "asteroid", "drones", "storm", "quake"],
+      ["gamma", "blackhole", "asteroid", "flare", "drones"]
+    ];
+    const pool = pools[tier];
+    const kind = pool[Math.floor(Math.random() * pool.length)];
+    const braced = this.plusRate >= settings.bracedPlusPerMinute ? 1 : 0;
+    const base = 1 + Math.floor(Math.random() * 2) + tier + (kind === "blackhole" || kind === "gamma" ? 1 : 0);
+    const count = Math.max(1, Math.min(Math.round(this.maxDestroys() * this.speedScale()), Math.round(base * Math.sqrt(this.dangerScale()) * this.speedScale()) - braced));
+    this.lastAttackAt = now;
+    return {
+      type: "disaster", kind, intensity: count, damageCount: count, natural: true, severity: this.dangerScale(),
+      durationMs: config.events.burnDurationMs,
+      reason: NATURAL_REASON[kind] ?? "ACT OF NATURE"
+    };
+  }
+
+  /**
+   * Households: while the stream is offline, a family packs up every so often (never more than
+   * a share of the town); once chat is back, positive points move families home again.
+   */
+  private updateHouseholds(signals: GrowthSignals, now: number, seconds: number): SimEvent | undefined {
+    const rest = config.rest;
+    const awake = this.lastMessageAt !== undefined && now - this.lastMessageAt < config.upkeep.pauseAfterSilenceMs;
+    if (!awake && this.lastMessageAt !== undefined) {
+      this.moveOutProgress += seconds / (rest.moveOutMinutes * 60);
+      if (this.moveOutProgress >= 1) {
+        this.moveOutProgress -= 1;
+        this.vacancies++;
+        return { type: "moveOut", count: 1 };
+      }
+      return undefined;
+    }
+    if (this.vacancies <= 0 || signals.plusPoints <= 0) return undefined;
+    this.moveInProgress += signals.plusPoints;
+    if (this.moveInProgress < rest.moveInPoints) return undefined;
+    this.moveInProgress -= rest.moveInPoints;
+    this.vacancies--;
+    return { type: "moveIn", count: 1 };
+  }
+
   /** Track when the community is present; coming back after a long break earns a welcome. */
   private noteActivity(signals: GrowthSignals, now: number): SimEvent | undefined {
     if (!signals.scoredMessages) return undefined;
@@ -400,7 +587,18 @@ export class EventMapper {
     return undefined;
   }
 
-  day(now: number) { return this.foundedAt === undefined ? 1 : Math.floor((now - this.foundedAt) / 86_400_000) + 1; }
+  /** The story's day number counts days the community was active, not calendar days since founding. */
+  day(_now?: number) { return Math.max(1, this.activeDays); }
+
+  private countActivity(delta: Counts, signals: GrowthSignals, now: number) {
+    for (const key of Object.keys(this.totalCounts) as Array<keyof Counts>) this.totalCounts[key] += delta[key] ?? 0;
+    this.totalMessages += Object.values(delta).reduce((sum, n) => sum + n, 0);
+    for (const user of Object.keys(signals.byUser)) if (!this.leaderboard.has(user)) this.everChatted++;
+    for (const [user, points] of Object.entries(signals.bySupporter ?? {})) this.supporters.set(user, (this.supporters.get(user) ?? 0) + points);
+    if (!signals.scoredMessages) return;
+    const today = localDay(now);
+    if (today !== this.lastActiveDay) { this.lastActiveDay = today; this.activeDays++; }
+  }
   private chapterGoal() { return config.story.firstChapterPoints * Math.pow(config.story.chapterGrowth, this.chapter); }
 
   /** Chapters never run out; each is named after what the community did since the last one. */
@@ -415,7 +613,7 @@ export class EventMapper {
     const entry: ChronicleEntry = { number: this.chapter, title, day: this.day(now), hero };
     this.chronicle.push(entry);
     if (this.chronicle.length > 40) this.chronicle.shift();
-    this.tally = { built: 0, repaired: 0, attacks: 0, washed: 0, eras: 0, capitol: 0, quiet: 0 };
+    this.tally = { built: 0, repaired: 0, attacks: 0, washed: 0, eras: 0, capitol: 0, quiet: 0, erasLost: 0 };
     this.heroes.clear();
     return { type: "chapter", ...entry };
   }
@@ -426,11 +624,50 @@ export class EventMapper {
    * Wear for time the city was closed (e.g. reopening the extension days later): gentle, capped,
    * and never past "shabby", so a break always leaves something to come back to.
    */
+  /** Points between the milestone of `era` and the one before it. */
+  private eraSpan(era: number) {
+    const milestones = config.technology.milestones;
+    if (era <= 0) return milestones[0].points;
+    const top = milestones[Math.min(era, milestones.length) - 1].points;
+    return top - (era >= 2 ? milestones[era - 2].points : 0);
+  }
+
+  /** Knock technology back by a share of the current era's span (so it bites at every era). */
+  private loseTechnology(share: number) {
+    if (share <= 0) return;
+    this.technologyProgress = Math.max(0, this.technologyProgress - share * this.eraSpan(Math.max(1, this.technologyEra)));
+  }
+
+  /** Drop eras whose milestone the city has fallen well below. */
+  private regress(now = Date.now()): SimEvent[] {
+    const events: SimEvent[] = [];
+    if (now - this.advancedAt < config.technology.regressionGraceMinutes * 60_000) return events;
+    const milestones = config.technology.milestones;
+    while (this.technologyEra > 0) {
+      const floor = milestones[this.technologyEra - 1].points;
+      if (this.technologyProgress >= floor - config.technology.regressionMargin * this.eraSpan(this.technologyEra)) break;
+      this.technologyEra--;
+      const name = this.technologyEra > 0 ? milestones[this.technologyEra - 1].name : "THE FIRST CAMPFIRE";
+      events.push({ type: "regression", era: this.technologyEra, name });
+    }
+    if (events.length && this.recoveryActive) this.recoveryEra = Math.min(this.recoveryEra, this.technologyEra);
+    return events;
+  }
+
   timeAway(ms: number): SimEvent[] {
     const rest = config.rest;
     const steps = Math.min(rest.maxTimeAwaySteps, Math.floor((ms / 3_600_000) * rest.timeAwayStepsPerHour));
     this.outstandingWear += steps;
-    return steps > 0 ? [{ type: "decay", count: steps, gentle: true }] : [];
+    const leaving = Math.min(rest.maxTimeAwayMoveOuts, Math.floor((ms / 3_600_000) * rest.timeAwayMoveOutsPerHour));
+    this.vacancies += leaving;
+    const events: SimEvent[] = [];
+    if (steps > 0) events.push({ type: "decay", count: steps, gentle: true });
+    if (leaving > 0) events.push({ type: "moveOut", count: leaving });
+    // While nobody was around, know-how faded too.
+    const technology = config.technology;
+    this.loseTechnology(Math.min(technology.maxAwayLossShare, (ms / 3_600_000) * technology.awayLossSharePerHour));
+    events.push(...this.regress());
+    return events;
   }
 
   /** Quiet chat wears the city down; positive chat repairs it. Paused while the city sleeps. */
@@ -449,6 +686,16 @@ export class EventMapper {
       this.sleepWear += seconds / (config.rest.sleepWearMinutes * 60);
       if (this.sleepWear >= 1) { this.sleepWear -= 1; this.outstandingWear++; return { type: "decay", count: 1, gentle: true }; }
       return undefined;
+    }
+    // Weathering never stops while the city is awake: chat has to keep repairing it.
+    if (awake && warmedUp) {
+      this.entropyProgress += seconds / ((upkeep.entropyMinutes * 60) / (1 + this.technologyEra * upkeep.entropyPerEra));
+      if (this.entropyProgress >= 1 && now - this.lastDecayAt >= upkeep.minDecayGapMs) {
+        this.entropyProgress -= 1;
+        this.lastDecayAt = now;
+        this.outstandingWear++;
+        return { type: "decay", count: 1 };
+      }
     }
     if (quiet) {
       this.decayProgress += (seconds / upkeep.decayStepSeconds) * (1 - this.plusRate / quietLevel);
@@ -498,7 +745,8 @@ export class EventMapper {
       this.threshold = Math.min(threat.maxThreshold, Math.max(threat.minThreshold, target || threat.destroyThreshold));
     }
     const before = this.threat;
-    this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - amplified);
+    // Danger grows with the story and with the city's reach: a Type II civilisation makes enemies.
+    this.threat = Math.max(0, this.threat - threat.decayPerSecond * seconds - signals.plusPoints * threat.positiveDefense - amplified * this.dangerScale());
     let washBonus = 0;
     this.peakThreatRatio = Math.max(this.peakThreatRatio, this.threat / (this.threshold * METER_PULSES));
     if (before > 0 && this.threat === 0) {
@@ -507,7 +755,7 @@ export class EventMapper {
     }
     // The rarity boost sharpens the danger meter; the score itself counts points at face value.
     this.scoreTotal += signals.plusPoints + signals.minusPoints + washBonus;
-    this.threat = Math.min(this.threat, this.threshold * threat.maxDestroysPerPulse * threat.backlogPulses);
+    this.threat = Math.min(this.threat, this.threshold * this.maxDestroys() * threat.backlogPulses);
     const fade = Math.exp(-seconds / 20);
     for (const rule of Object.keys(this.negativeMix)) this.negativeMix[rule] *= fade;
     for (const [rule, points] of Object.entries(signals.byRule)) if (points < 0) this.negativeMix[rule] = (this.negativeMix[rule] ?? 0) - points;
@@ -524,6 +772,9 @@ export class EventMapper {
       threatRatio: Math.min(1, this.threat / (this.threshold * METER_PULSES)),
       pops,
       topBuilders: [...this.leaderboard].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, points]) => ({ name, points: Math.round(points) })),
+      topSupporters: [...this.supporters].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, points]) => ({ name, points: Math.round(points * 10) / 10 })),
+      topPatrons: [...this.donors].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, points]) => ({ name, points: Math.round(points) })),
+      activity: { messages: this.totalMessages, counts: { ...this.totalCounts }, chatters: this.everChatted },
       highlight: signals.highlight ? { user: signals.highlight.user, text: signals.highlight.text } : undefined
     };
   }
@@ -531,24 +782,32 @@ export class EventMapper {
   /** A destruction pulse, paced like build pulses: one or two buildings each time the meter fills. */
   private maybeAttack(now: number): SimEvent | undefined {
     const threat = config.threat;
-    if (this.threat < this.threshold || now - this.lastAttackAt < threat.cooldownMs) return undefined;
-    const count = Math.min(threat.maxDestroysPerPulse, Math.floor(this.threat / this.threshold));
-    this.threat -= count * this.threshold;
+    if (this.threat < this.threshold) { this.massingSince = undefined; return undefined; }
+    this.massingSince ??= now;
+    if (now < this.strikeAt()) return undefined;
+    this.massingSince = undefined;
+    const pulses = Math.min(this.maxDestroys(), Math.floor(this.threat / this.threshold));
+    this.threat -= pulses * this.threshold;
+    const count = Math.round(pulses * this.speedScale() * config.threat.attackSizeMultiplier);
     this.lastAttackAt = now;
     const [rule] = Object.entries(this.negativeMix).sort((a, b) => b[1] - a[1])[0] ?? ["toxic"];
     // The attack matches its cause and scales with the damage: spam is always a swarm and caps
     // are always lightning, just bigger. Toxic chat starts as a fire and escalates to a meteor.
     const flavour = ATTACK_FOR_RULE[rule] ?? ["fire"];
     const toxic = rule === "toxic" || rule === "hate" || rule === "lowEffort";
-    const kind: AttackKind = rule === "hate" || (toxic && count >= 3) ? "meteor" : toxic ? "fire" : flavour[Math.floor(Math.random() * flavour.length)];
+    let kind: AttackKind = rule === "hate" || (toxic && count >= 3) ? "meteor" : toxic ? "fire" : flavour[Math.floor(Math.random() * flavour.length)];
+    // Space-age cities get space-age versions of the same trouble.
+    if (this.technologyEra >= 7) kind = ({ meteor: "asteroid", swarm: "drones", fire: this.technologyEra >= 8 ? "flare" : "fire" } as Partial<Record<AttackKind, AttackKind>>)[kind] ?? kind;
     this.snapshot = { ...this.snapshot, threat: Math.round(this.threat * 10) / 10, threatRatio: Math.min(1, this.threat / (this.threshold * METER_PULSES)) };
     return {
-      type: "disaster", kind, intensity: count, damageCount: count,
+      type: "disaster", kind, intensity: count, damageCount: count, severity: this.dangerScale(),
       durationMs: config.events.burnDurationMs,
       reason: ATTACK_REASON[rule] ?? "TROUBLE"
     };
   }
 
+
+  private repairCost() { return config.growth.progressThreshold * config.repair.costShare; }
 
   private startRecovery(intensity: number) {
     const recovery = config.recovery;

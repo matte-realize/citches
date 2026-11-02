@@ -3,6 +3,7 @@ import { classify } from "../classify/classifier.js";
 import { analyzeMessage } from "../classify/signals.js";
 import { ScoreContext, scoreMessage } from "../score/rules.js";
 import type { ScoreHit } from "../score/rules.js";
+import { displayName, moderate } from "../moderation/censor.js";
 import type { Aggregate, Category, ChatCommand, ChatMessage, Counts } from "../types.js";
 
 const emptyCounts = (): Counts => ({ RAID: 0, SPAM: 0, QUESTION: 0, HATE: 0, COMMENT: 0 });
@@ -22,6 +23,8 @@ export interface GrowthSignals {
   commands: Array<{ user: string; command: ChatCommand; color?: string; amount?: number }>;
   /** Latest known name colour per chatter. */
   colors: Record<string, string>;
+  /** Support points (bits, subs, gifts) per chatter this tick. */
+  bySupporter: Record<string, number>;
 }
 
 const COMMAND = /^!(plant|repair|cheer|home|donate)\b\s*(\d+)?/i;
@@ -70,7 +73,7 @@ export class Aggregator {
         supportPoints += signal.supportPoints;
       }
       const deltaCounts = emptyCounts();
-      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, scoredMessages: 0, minusMessages: 0, byRule: {}, byLabel: {}, byUser: {}, commands: this.pendingCommands, colors: {} };
+      const growthSignals: GrowthSignals = { eligibleMessages: 0, positiveMessages: 0, complexityTotal: 0, supportPoints: 0, plusPoints: 0, minusPoints: 0, scoredMessages: 0, minusMessages: 0, byRule: {}, byLabel: {}, byUser: {}, commands: this.pendingCommands, colors: {}, bySupporter: {} };
       this.pendingCommands = [];
       let deltaRaidViewers = 0;
       for (const { message, category, signal, hits: rawHits } of this.pending) {
@@ -92,7 +95,8 @@ export class Aggregator {
         const earned = hits.reduce((sum, hit) => sum + hit.points, 0);
         if (earned > 0 && message.user) growthSignals.byUser[message.user] = (growthSignals.byUser[message.user] ?? 0) + earned;
         const text = message.text.trim();
-        if (!negative && earned >= 1 && text.length >= 6 && text.length <= 90 && (!growthSignals.highlight || earned > growthSignals.highlight.points)) {
+        // Villagers only repeat clean lines: nothing that needed masking, no links, no hate.
+        if (!negative && earned >= 1 && text.length >= 6 && text.length <= 90 && (!growthSignals.highlight || earned > growthSignals.highlight.points) && !moderate(text).masked && displayName(message.user) === message.user) {
           growthSignals.highlight = { user: message.user, text, points: earned };
         }
         for (const hit of hits) {
@@ -106,6 +110,7 @@ export class Aggregator {
         if (signal.positive) growthSignals.positiveMessages++;
         growthSignals.complexityTotal += signal.complexity;
         growthSignals.supportPoints += signal.supportPoints;
+        if (signal.supportPoints > 0 && message.user) growthSignals.bySupporter[message.user] = (growthSignals.bySupporter[message.user] ?? 0) + signal.supportPoints;
       }
       this.pending = [];
       if (this.chatterRecent.size > 3000) for (const [user, entry] of this.chatterRecent) if (now - entry.at > 30 * 60_000) this.chatterRecent.delete(user);

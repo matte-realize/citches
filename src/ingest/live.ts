@@ -1,5 +1,7 @@
 import tmi from "tmi.js";
-import { appendFile, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
+import { createWriteStream, type WriteStream } from "node:fs";
+import { finished } from "node:stream/promises";
 import { join } from "node:path";
 import { normalizeTwitchMessage, type NormalizeOverrides } from "./normalize.js";
 import type { ChatMessage, MessageSource } from "../types.js";
@@ -8,13 +10,16 @@ export class LiveSource implements MessageSource {
   private client?: InstanceType<typeof tmi.Client>;
   private handler: (message: ChatMessage) => void = () => {};
   private logFile = "";
+  private logStream?: WriteStream;
   constructor(private channel: string) {}
   onMessage(handler: (message: ChatMessage) => void) { this.handler = handler; }
 
-  private async receive(channel: string, tags: Record<string, any>, text: string, overrides?: NormalizeOverrides) {
+  private receive(channel: string, tags: Record<string, any>, text: string, overrides?: NormalizeOverrides) {
     const receivedAt = Date.now();
     const raw = { receivedAt, channel, tags, text, ...overrides };
-    await appendFile(this.logFile, `${JSON.stringify(raw)}\n`);
+    // A single buffered stream preserves receive order and avoids one filesystem operation per
+    // chat message. The stream reports disk failures without interrupting live ingestion.
+    this.logStream?.write(`${JSON.stringify(raw)}\n`);
     const message = normalizeTwitchMessage(tags, text, receivedAt, overrides);
     const supportLabel = message.supportPoints ? ` [support +${message.supportPoints.toFixed(1)}]` : "";
     console.log(`[${new Date(message.timestamp).toISOString()}] ${message.user}: ${message.text}${supportLabel}`);
@@ -26,6 +31,8 @@ export class LiveSource implements MessageSource {
     await mkdir("logs", { recursive: true });
     const date = new Date().toISOString().slice(0, 10);
     this.logFile = join("logs", `${safeChannel}-${date}.jsonl`);
+    this.logStream = createWriteStream(this.logFile, { flags: "a" });
+    this.logStream.on("error", error => console.error(`Could not write chat log ${this.logFile}:`, error));
     const client = new tmi.Client({ options: { debug: false }, connection: { reconnect: true, secure: true }, channels: [safeChannel] });
     this.client = client;
     client.on("message", (_channel, tags, text, self) => {
@@ -59,5 +66,12 @@ export class LiveSource implements MessageSource {
     await client.connect();
     console.log(`Connected to #${safeChannel}; logging to ${this.logFile}`);
   }
-  async close() { await this.client?.disconnect(); }
+  async close() {
+    await this.client?.disconnect();
+    const stream = this.logStream;
+    if (!stream) return;
+    stream.end();
+    await finished(stream).catch(error => console.error(`Could not finish chat log ${this.logFile}:`, error));
+    this.logStream = undefined;
+  }
 }

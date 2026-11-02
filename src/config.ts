@@ -42,9 +42,11 @@ export const config = {
      * more negativity to do damage; small friendly ones feel a few trolls. `destroyThreshold` is
      * the starting value before there is any history.
      */
-    destroyThreshold: 4.5, minThreshold: 2.2, maxThreshold: 14, adaptiveShare: 0.09, rateWindowSeconds: 90,
-    maxDestroysPerPulse: 5, cooldownMs: 180_000,
-    decayPerSecond: 0.06, positiveDefense: 0.18,
+    destroyThreshold: 3.5, minThreshold: 1.8, maxThreshold: 9, adaptiveShare: 0.06, rateWindowSeconds: 90,
+    maxDestroysPerPulse: 8, cooldownMs: 140_000,
+    /** Once the meter fills, the attack masses for a short warning, then strikes (never closer than minGapMs apart). */
+    warningMs: 12_000, minGapMs: 135_000,
+    decayPerSecond: 0.05, positiveDefense: 0.12,
     /** Danger above this many pulses' worth is dropped, so a burst of trolls cannot snowball. */
     backlogPulses: 1.5,
     /**
@@ -54,7 +56,11 @@ export const config = {
     rarityBoost: 1.5, rarityWindowSeconds: 60,
     /** Draining a meter that was at least this full back to zero earns a "HATERS WASHED OUT" bonus. */
     washOutFrom: 0.5, washOutBonus: 6,
-    technologyPenalty: 0.35
+    technologyPenalty: 0.8,
+    /** Every chat-driven attack takes this many times the buildings its meter pulses paid for. */
+    attackSizeMultiplier: 1.15,
+    /** Attacks grow with sqrt(pace / reference), from 1x at this pace up to maxSpeedScale. */
+    speedReferencePerMinute: 30, maxSpeedScale: 3, speedWindowSeconds: 300
   },
   /** What counts as spam. Short emote reactions and stretched words ("noooo") are normal chat. */
   /**
@@ -67,6 +73,8 @@ export const config = {
     quietShare: 0.35,          // quiet = plus points below this share of the channel's typical rate...
     quietFloorPerMinute: 1.5,  // ...or below ~one positive message a minute, whichever is higher
     decayStepSeconds: 60,      // at most one wear step a minute, in fully quiet chat
+    /** Weathering: even a busy, happy city wears a little every few minutes; bigger eras wear faster. */
+    entropyMinutes: 5, entropyPerEra: 0.08,
     minDecayGapMs: 12_000,
     pauseAfterSilenceMs: 240_000,
     warmupMinutes: 2,          // no wear during the first minutes of a session
@@ -118,19 +126,44 @@ export const config = {
    * While the city sleeps it still fades, gently: one wear step every `sleepWearMinutes`, never past
    * "shabby". Coming back after `welcomeAfterMinutes` makes repairs half price for a while.
    */
-  rest: { sleepWearMinutes: 20, maxTimeAwaySteps: 10, timeAwayStepsPerHour: 2, welcomeAfterMinutes: 30, welcomeMinutes: 10 },
+  rest: {
+    sleepWearMinutes: 20, maxTimeAwaySteps: 10, timeAwayStepsPerHour: 2, welcomeAfterMinutes: 30, welcomeMinutes: 10,
+    /** While offline a household moves out every so often; chat brings families back. */
+    moveOutMinutes: 14, maxVacancyShare: 0.6, moveInPoints: 8, welcomeMoveIns: 3, timeAwayMoveOutsPerHour: 3, maxTimeAwayMoveOuts: 12
+  },
+  /**
+   * Natural disasters strike for no reason at all, but only while people are around (so an idle
+   * or bot-run stream is not punished twice). They escalate as the story goes on, and the
+   * Kardashev eras bring catastrophes on a planetary, stellar and galactic scale.
+   */
+  catastrophes: {
+    minutesBetween: [8, 16],
+    /** Catastrophe gap for Empire and below, Type I, Type II and Type III. */
+    gapScale: [1, 0.8, 0.65, 0.5],
+    /**
+     * Danger grows exponentially with each era (1.15^era: x1.4 by Stone City, x2.3 by Empire,
+     * x3.5 by Type III), so each new era is harder to hold. Progress toward the next era slows
+     * the same way, more gently.
+     */
+    dangerPerEra: 1.15, progressDragPerEra: 1.06,
+    /** Each chapter makes trouble a little worse, up to a cap. */
+    escalationPerChapter: 0.05, maxEscalation: 1.8,
+    /** A strong positive chat braces the city: one fewer building lost. */
+    bracedPlusPerMinute: 30,
+    warmupMinutes: 5
+  },
   /** Endless story: each chapter needs a little more community effort than the last. */
   story: { firstChapterPoints: 120, chapterGrowth: 1.3 },
   /** Owned homes grow when their owner comes back after a break or keeps contributing. */
   homes: { returnGapMs: 10 * 60_000, upgradePoints: 30, maxLevel: 3 },
   /** What `npm run calibrate` checks the danger system against, using real chat logs. */
   calibration: {
-    // Losses are noticeable but never outpace growth. Very busy chats build ~40 homes a minute while
-    // attacks stay capped as events (one per 3 min), so their ratio sits lowest; hence the 2.5% floor.
-    lostPerBuilt: [0.025, 0.3] as [number, number],
-    minutesBetweenAttacks: [3, 8] as [number, number],  // an attack is an event, not background noise
-    lostPerAttack: [1, 4] as [number, number],          // average buildings taken per attack
-    maxLostPerMinute: 6                                   // worst minute, outside of hate events
+    // Losses really sting but never outpace growth. Very busy chats build ~40 homes a minute while
+    // attacks stay capped as events, so their ratio sits lowest; hence the 4% floor.
+    lostPerBuilt: [0.04, 0.4] as [number, number],
+    minutesBetweenAttacks: [2.3, 7] as [number, number],  // an attack is an event, not background noise
+    lostPerAttack: [2, 7] as [number, number],            // average per attack at 30 msg/min; scales with pace
+    maxLostPerMinute: 20                                   // worst minute (an attack plus a disaster), scales with pace
   },
   spam: { emoteRatio: 0.8, emoteWallMinimum: 6, repeatedCharacterLength: 14, repeatedWordMinimum: 6 },
   events: {
@@ -146,16 +179,41 @@ export const config = {
   },
   technology: {
     milestones: [
-      { name: "HUTS & GATHERING", points: 65 },
-      { name: "SETTLED HOMES", points: 180 },
-      { name: "STONE CITY", points: 360 },
-      { name: "INDUSTRIAL CITY", points: 650 },
-      { name: "AGE OF AIRSHIPS", points: 1000 },
-      { name: "EMPIRE", points: 1450 }
+      { name: "HUTS & GATHERING", points: 80 },
+      { name: "SETTLED HOMES", points: 260 },
+      { name: "STONE CITY", points: 600 },
+      { name: "INDUSTRIAL CITY", points: 1200 },
+      { name: "AGE OF AIRSHIPS", points: 2100 },
+      { name: "EMPIRE", points: 3400 },
+      // The Kardashev scale: a planet's worth of energy, then a star's, then a galaxy's.
+      { name: "TYPE I · PLANETARY", points: 5400 },
+      { name: "TYPE II · STELLAR", points: 8500 },
+      { name: "TYPE III · GALACTIC", points: 13000 }
     ],
     chatPoint: 0.12, complexityPoint: 0.42, positivityPoint: 0.7,
-    supportPointMultiplier: 3.5
+    /** Above this pace (messages/min) each message is worth (reference / pace) ^ volumeDamping. */
+    volumeReferencePerMinute: 20, volumeDamping: 0.6,
+    /** Each negative message cancels this many positive ones from the positivity bonus. */
+    negativeOffset: 2,
+    supportPointMultiplier: 3.5,
+    /**
+     * Eras can be lost. Progress may fall below the last milestone (toxic chat, destruction, long
+     * absences); once it is this share of that era's span below the milestone, the era drops.
+     * The gap keeps a city sitting on the line from flickering between eras.
+     */
+    regressionMargin: 0.35,
+    /** A freshly reached era is safe for this long, so one bad minute can't snatch it straight back. */
+    regressionGraceMinutes: 8,
+    /** Each building destroyed by an attack or catastrophe costs this share of the current era's span. */
+    disasterLossShare: 0.005,
+    /** Hours away drain this share of the current era's span per hour, up to the cap. */
+    awayLossSharePerHour: 0.03, maxAwayLossShare: 0.25
   },
+  /**
+   * After any attack or disaster, new construction halts and every bit of chat progress goes into
+   * rebuilding the ruins first. Repairs cost a share of a new build, and bits/subs count extra.
+   */
+  repair: { costShare: 0.55, maxPerPulse: 4, supportMultiplier: 1.5, maxRuins: 60 },
   recovery: {
     basePoints: 24, pointsPerIntensity: 20,
     supportPointMultiplier: 6, positiveMessagePoints: 1, complexityPoint: 0.2,

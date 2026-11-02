@@ -23,16 +23,24 @@ export async function run(source: MessageSource) {
     }
     response.writeHead(request.url === "/health" ? 200 : 404, { "Content-Type": "text/plain" }).end(request.url === "/health" ? "ok" : "not found");
   });
-  const wss = new WebSocketServer({ server });
+  // History goes out compressed: a late joiner's catch-up is hundreds of kilobytes of JSON.
+  const wss = new WebSocketServer({ server, perMessageDeflate: { threshold: 4096 } });
   const clients = new Set<WebSocket>();
   wss.on("connection", socket => {
     clients.add(socket);
     socket.on("close", () => clients.delete(socket));
-    for (const tick of history) socket.send(JSON.stringify({ ...tick, replay: true }));
+    // One batch, not one message per past tick: the viewer rebuilds the whole city in a single pass.
+    socket.send(JSON.stringify({ type: "history", events: history.flatMap(tick => tick.events), latest }));
   });
   const broadcast = (data: unknown) => {
     const json = JSON.stringify(data);
-    for (const client of clients) if (client.readyState === client.OPEN) client.send(json);
+    for (const client of clients) {
+      if (client.readyState !== client.OPEN) continue;
+      // A hidden/frozen overlay must not accumulate every 250 ms tick in memory. It can reconnect
+      // and catch up from history after being closed once its outbound buffer gets this large.
+      if (client.bufferedAmount > 512 * 1024) { client.terminate(); clients.delete(client); continue; }
+      client.send(json);
+    }
   };
   const publisher = ExtensionPublisher.fromEnv();
   publisher?.start();

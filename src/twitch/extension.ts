@@ -29,6 +29,7 @@ export class ExtensionPublisher {
   private pending: ExtensionTick[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private failures = 0;
+  private flushing = false;
 
   constructor(private clientId: string, private secret: string, private ownerId: string, private channelId: string, private intervalMs = 1100) {}
 
@@ -53,14 +54,30 @@ export class ExtensionPublisher {
     this.pending = [];
     const tick = { type: "tick", aggregate: latest.aggregate, events, progress: latest.progress, score: { ...latest.score, pops } };
     let json = JSON.stringify(tick);
-    // Stay under the PubSub size cap by dropping the bulkiest optional data first.
-    while (json.length > MAX_BYTES && tick.events.length) { tick.events.pop(); json = JSON.stringify(tick); }
+    // Stay under the PubSub size cap by keeping the largest event prefix that fits. Re-stringifying
+    // once per dropped event made a single oversized batch quadratic in its event count.
+    if (json.length > MAX_BYTES && tick.events.length) {
+      const events = tick.events;
+      let low = 0, high = events.length;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        tick.events = events.slice(0, middle);
+        if (JSON.stringify(tick).length <= MAX_BYTES) low = middle;
+        else high = middle - 1;
+      }
+      tick.events = events.slice(0, low);
+      json = JSON.stringify(tick);
+    }
     return json;
   }
 
   private async flush() {
+    // setInterval can fire again before a slow Helix request has finished. Keep at most one
+    // publisher request in flight; the next tick interval will send the accumulated batch.
+    if (this.flushing) return;
     const message = this.batch();
     if (!message) return;
+    this.flushing = true;
     try {
       const response = await fetch("https://api.twitch.tv/helix/extensions/pubsub", {
         method: "POST",
@@ -69,11 +86,14 @@ export class ExtensionPublisher {
           "Client-Id": this.clientId,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ target: ["broadcast"], broadcaster_id: this.channelId, is_global_broadcast: false, message })
+        body: JSON.stringify({ target: ["broadcast"], broadcaster_id: this.channelId, is_global_broadcast: false, message }),
+        signal: AbortSignal.timeout(10_000)
       });
       if (!response.ok && this.failures++ < 5) console.warn(`extension pubsub ${response.status}: ${await response.text()}`);
     } catch (error) {
       if (this.failures++ < 5) console.warn("extension pubsub failed", error);
+    } finally {
+      this.flushing = false;
     }
   }
 }
