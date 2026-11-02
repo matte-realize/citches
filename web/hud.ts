@@ -1,7 +1,12 @@
 import type { CommunityProgress, ScoreSnapshot, SimEvent } from "../src/types.js";
+import { displayName, moderate } from "../src/moderation/censor.js";
 
-const ERA_NAMES = ["CAMPFIRE", "HUTS", "HOMES", "STONE CITY", "INDUSTRIAL", "AIRSHIPS", "EMPIRE"];
-const ATTACK_VERB: Record<string, string> = { meteor: "METEOR", storm: "STORM", swarm: "SWARM", fire: "FIRE" };
+const ERA_NAMES = ["CAMPFIRE", "HUTS", "HOMES", "STONE CITY", "INDUSTRIAL", "AIRSHIPS", "EMPIRE", "TYPE I", "TYPE II", "TYPE III"];
+const ATTACK_VERB: Record<string, string> = {
+  meteor: "METEOR", storm: "STORM", swarm: "SWARM", fire: "FIRE",
+  quake: "QUAKE", flood: "FLOOD", tornado: "TORNADO",
+  flare: "SOLAR FLARE", asteroid: "ASTEROID", drones: "ROGUE AI", gamma: "GAMMA BURST", blackhole: "BLACK HOLE"
+};
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = "") => {
   const node = document.createElement(tag);
@@ -24,6 +29,8 @@ function wavy(text: string, className: string) {
 export interface HudOptions {
   overlay: boolean;
   screenPoint: () => { x: number; y: number };
+  /** A random spot in the city (a building, a villager) so chat pops land all over town. */
+  scatterPoint?: () => { x: number; y: number } | undefined;
   /** Screen point above a random villager, for speech bubbles. */
   speakerPoint?: () => { x: number; y: number } | undefined;
   /** Name shown on the scoreboard, e.g. "XQC CITY". */
@@ -47,7 +54,11 @@ export class CityHud {
   private eraValue = el("div", "meter-value");
   private dangerFill = el("div", "meter-fill danger-fill");
   private dangerMeter = el("div", "meter danger-meter");
+  private dangerLabel = el("div", "danger-label", "DANGER");
+  /** performance.now() when a massing attack will strike, while the meter is full. */
+  private incomingAt?: number;
   private recovery = el("div", "recovery-row");
+  private repairRow = el("div", "recovery-row repair-row");
   private leaders = el("div", "leaders-row");
   private upkeepLine = el("div", "upkeep-line");
   private hint = el("div", "command-hint");
@@ -58,6 +69,14 @@ export class CityHud {
   private capitolFill = el("div", "meter-fill capitol-fill");
   private capitolValue = el("div", "meter-value capitol-value");
   private lastBubbleAt = 0;
+  /** Side banner: who built the city, who backed the stream, who funded the capitol. */
+  private hall = el("aside", "hall");
+  private hallLists = {
+    builders: el("ol", "hall-list"),
+    supporters: el("ol", "hall-list"),
+    patrons: el("ol", "hall-list")
+  };
+  private hallTotals = el("div", "hall-totals");
   private sleepSign = el("div", "sleep-sign");
   private zTimer?: ReturnType<typeof setInterval>;
   private popLayer = el("div", "pop-layer");
@@ -80,8 +99,9 @@ export class CityHud {
     eraRow.append(this.eraLabel, eraMeter, this.eraValue);
     const dangerRow = el("div", "meter-row");
     this.dangerMeter.append(this.dangerFill);
-    dangerRow.append(el("div", "danger-label", "DANGER"), this.dangerMeter);
+    dangerRow.append(this.dangerLabel, this.dangerMeter);
     this.recovery.hidden = true;
+    this.repairRow.hidden = true;
     this.leaders.hidden = true;
     const capitolMeter = el("div", "meter capitol-meter");
     capitolMeter.append(this.capitolFill);
@@ -91,7 +111,7 @@ export class CityHud {
     this.upkeepLine.hidden = true;
     this.hint.innerHTML = "SPEND POINTS: <b>!plant</b> <b>!repair</b> <b>!cheer</b> <b>!donate</b> <b>!home</b>";
     this.storyLine.hidden = true;
-    board.append(scoreRow, this.storyLine, eraRow, dangerRow, this.upkeepLine, this.leaders, this.recovery, this.hint);
+    board.append(scoreRow, this.storyLine, eraRow, dangerRow, this.upkeepLine, this.leaders, this.repairRow, this.recovery, this.hint);
     if (options.featuredHome) setInterval(() => {
       const home = options.featuredHome?.();
       if (home && !document.body.classList.contains("city-asleep")) this.nameTag(home.owner, home.at, home.level, home.monument);
@@ -99,7 +119,24 @@ export class CityHud {
     this.sleepSign.hidden = true;
     this.sleepSign.append(el("span", "sleep-moon", "☾"), el("span", "sleep-text", "STREAM OFFLINE · THE CITY IS SLEEPING"));
     board.prepend(this.sleepSign);
-    this.root.append(this.popLayer, this.bannerLayer, board);
+    const section = (title: string, icon: string, list: HTMLOListElement, empty: string) => {
+      const block = el("div", "hall-section");
+      const heading = el("div", "hall-heading");
+      heading.append(el("span", "hall-icon", icon), el("span", "", title));
+      list.dataset.empty = empty;
+      block.append(heading, list);
+      return block;
+    };
+    const hallTitle = el("div", "hall-title");
+    hallTitle.append(el("span", "hall-crown", "♛"), el("span", "", "HALL OF FAME"));
+    this.hall.append(
+      hallTitle,
+      section("TOP BUILDERS", "▲", this.hallLists.builders, "CHAT TO BUILD"),
+      section("SPONSORS", "♥", this.hallLists.supporters, "BITS · SUBS · GIFTS"),
+      section("CAPITOL PATRONS", "⌂", this.hallLists.patrons, "!DONATE TO THE CAPITOL"),
+      this.hallTotals
+    );
+    this.root.append(this.popLayer, this.bannerLayer, this.hall, board);
     document.body.appendChild(this.root);
     requestAnimationFrame(this.tick);
   }
@@ -112,6 +149,11 @@ export class CityHud {
       this.total.textContent = Math.round(this.shownTotal).toLocaleString();
     }
     const now = performance.now();
+    if (this.incomingAt !== undefined) {
+      const seconds = Math.max(0, Math.ceil((this.incomingAt - now) / 1000));
+      const text = seconds > 0 ? `⚠ ATTACK ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}` : "⚠ STRIKING!";
+      if (this.dangerLabel.textContent !== text) this.dangerLabel.textContent = text;
+    }
     if (this.popQueue.length && now - this.lastPopAt > 170 && this.live < 7) {
       this.lastPopAt = now;
       this.spawnPop(this.popQueue.shift()!);
@@ -134,18 +176,32 @@ export class CityHud {
       this.delta.className = `score-delta ${net > 0 ? "up" : "down"}`;
     }
     this.dangerFill.style.width = `${Math.round(score.threatRatio * 100)}%`;
-    this.dangerMeter.classList.toggle("hot", score.threatRatio > 0.7);
+    const massing = score.incomingMs !== undefined && !replay;
+    this.dangerMeter.classList.toggle("hot", score.threatRatio > 0.7 && !massing);
+    this.dangerMeter.classList.toggle("massing", massing);
+    document.body.classList.toggle("attack-incoming", massing);
+    if (massing && this.incomingAt === undefined) this.banner("⚠ ATTACK INCOMING · KIND CHAT CAN BREAK IT UP", "attack");
+    this.incomingAt = massing ? performance.now() + score.incomingMs! : undefined;
+    if (!massing) this.dangerLabel.textContent = "DANGER";
     if (!replay) for (const pop of score.pops) {
       if (this.popQueue.length < 14) this.popQueue.push(pop);
     }
-    if (score.topBuilders?.length) {
+    const leaderOrder = (score.topBuilders ?? []).map(leader => leader.name).join("\n");
+    if (score.topBuilders?.length && leaderOrder !== this.leaders.dataset.order) {
+      this.leaders.dataset.order = leaderOrder;
       this.leaders.hidden = false;
       this.leaders.replaceChildren(el("span", "leaders-caption", "TOP BUILDERS"), ...score.topBuilders.map((leader, index) => {
         const chip = el("span", `leader leader-${index}`);
-        chip.append(el("span", "leader-name", leader.name), el("span", "leader-points", String(leader.points)));
+        chip.append(el("span", "leader-name", displayName(leader.name)), el("span", "leader-points", String(leader.points)));
         return chip;
       }));
+    } else if (score.topBuilders?.length) {
+      score.topBuilders.forEach((leader, index) => {
+        const points = this.leaders.querySelectorAll(".leader-points")[index];
+        if (points) points.textContent = String(leader.points);
+      });
     }
+    this.updateHall(score);
     if (!replay && score.highlight) this.say(score.highlight.user, score.highlight.text);
     if (score.story) {
       const story = score.story;
@@ -171,12 +227,57 @@ export class CityHud {
     this.upkeepLine.textContent = upkeep === "decaying" ? "QUIET CHAT · THE CITY IS WEARING DOWN" : "CHAT IS REPAIRING THE CITY";
   }
 
+  private updateHall(score: ScoreSnapshot) {
+    // Rows only rebuild (and hop) when the ranking itself changes; points update quietly in place.
+    const fill = (list: HTMLOListElement, entries: Array<{ name: string; points: number }> | undefined, unit: string) => {
+      const top = (entries ?? []).slice(0, 3);
+      const order = top.map(entry => entry.name).join("\n");
+      if (list.dataset.order === order && list.children.length) {
+        top.forEach((entry, index) => {
+          const points = list.children[index]?.querySelector(".hall-points");
+          const text = `${entry.points.toLocaleString()}${unit}`;
+          if (points && points.textContent !== text) points.textContent = text;
+        });
+        return;
+      }
+      const previous = (list.dataset.order ?? "").split("\n");
+      list.dataset.order = order;
+      const rows = top.map((entry, index) => {
+        const moved = previous[index] !== entry.name;
+        const row = el("li", `hall-row hall-rank-${index}${moved ? " hall-moved" : ""}`);
+        row.append(el("span", "hall-rank", String(index + 1)), el("span", "hall-name", displayName(entry.name)), el("span", "hall-points", `${entry.points.toLocaleString()}${unit}`));
+        return row;
+      });
+      if (!rows.length) rows.push(el("li", "hall-empty", list.dataset.empty ?? ""));
+      list.replaceChildren(...rows);
+    };
+    fill(this.hallLists.builders, score.topBuilders, "");
+    fill(this.hallLists.supporters, score.topSupporters, "♥");
+    fill(this.hallLists.patrons, score.topPatrons, "");
+    const activity = score.activity;
+    const days = score.story?.day ?? 1;
+    const stat = (value: string, label: string) => {
+      const node = el("span", "hall-stat");
+      node.append(el("b", "", value), el("span", "", label));
+      return node;
+    };
+    this.hallTotals.replaceChildren(
+      stat((activity?.messages ?? 0).toLocaleString(), "MESSAGES"),
+      stat((activity?.chatters ?? 0).toLocaleString(), "CHATTERS"),
+      stat(String(days), days === 1 ? "DAY ACTIVE" : "DAYS ACTIVE")
+    );
+  }
+
   setProgress(progress: CommunityProgress) {
     const tech = progress.technology;
     const percent = Math.max(0, Math.min(100, Math.round(tech.ratio * 100)));
     this.eraFill.style.width = `${percent}%`;
-    this.eraLabel.textContent = tech.ratio >= 1 && tech.era >= 6 ? "EMPIRE!" : `▶ ${tech.name}`;
-    this.eraValue.textContent = `${percent}%`;
+    this.eraLabel.textContent = tech.ratio >= 1 && tech.era >= 9 ? "TYPE III!" : `▶ ${tech.name}`;
+    this.eraValue.textContent = tech.ratio >= 1 && tech.era >= 9 ? "MAX" : `${Math.floor(tech.current)}/${Math.round(tech.goal)}`;
+    this.eraValue.title = `${percent}%`;
+    const repair = progress.repair;
+    this.repairRow.hidden = !repair || repair.ruins <= 0;
+    if (repair && repair.ruins > 0) this.repairRow.textContent = `REPAIRING ${repair.ruins} RUIN${repair.ruins === 1 ? "" : "S"} · GROWTH PAUSED · CHAT TO FIX!`;
     const recovery = progress.recovery;
     this.recovery.hidden = !recovery.active;
     if (recovery.active) this.recovery.textContent = `REBUILDING ${Math.round(recovery.ratio * 100)}% · ${ERA_NAMES[recovery.era] ?? ""} HOMES`;
@@ -205,6 +306,7 @@ export class CityHud {
 
   /** Name tag floating over a chatter's home. */
   nameTag(owner: string, at: { x: number; y: number }, level = 1, monument = false) {
+    if (!monument) owner = displayName(owner);
     const tag = el("div", `name-tag${monument ? " monument-tag" : ""}`);
     tag.append(el("span", "name-tag-icon", monument ? "♜" : level >= 3 ? "★" : "⌂"), el("span", "name-tag-name", monument ? owner : `${owner}'s home`));
     tag.style.left = `${Math.max(90, Math.min(innerWidth - 90, at.x))}px`;
@@ -215,6 +317,7 @@ export class CityHud {
 
   /** What a chat command did, credited to whoever typed it. */
   notice(kind: string, user: string, at?: { x: number; y: number }, extra: { level?: number; cost?: number; title?: string } = {}) {
+    user = user ? displayName(user) : user;
     if (kind === "chapter") { this.banner(`CHAPTER ${extra.level ?? ""}: ${(extra.title ?? "").toUpperCase()}`, "era"); if (user) this.say("THE CHRONICLE", `${user} is the hero of chapter ${extra.level}!`); return; }
     if (kind === "welcome") { this.banner("WELCOME BACK! REPAIRS HALF PRICE", "raid"); return; }
     const text: Record<string, string> = {
@@ -224,6 +327,8 @@ export class CityHud {
       nohome: `${user} has no home yet. Chat kindly to build one!`,
       broke: `${user} needs ${extra.cost ?? "more"} pts`,
       fine: `${user}: the city is in good shape!`,
+      moveOut: "A family moved out…",
+      moveIn: "A family moved back home!",
       upgrade: `${user}'s home grew to level ${extra.level ?? 1}!`,
       donate: `${user} donated ${extra.cost ?? ""} to the capitol!`
     };
@@ -253,6 +358,9 @@ export class CityHud {
 
   /** A villager repeats a wholesome chat message in a pixel speech bubble. */
   private say(user: string, text: string) {
+    // Second line of defence (the backend already filters): never show anything that needed masking.
+    const clean = moderate(text);
+    if (user !== "THE CHRONICLE" && (clean.blocked || clean.masked || displayName(user) !== user)) return;
     const now = performance.now();
     if (now - this.lastBubbleAt < 3200) return;
     const at = this.options.speakerPoint?.();
@@ -269,33 +377,38 @@ export class CityHud {
   event(event: SimEvent) {
     if (event.type === "build" && event.builders?.length) {
       const what = event.kind === "landmark" ? "LANDMARK" : event.count > 1 ? `${event.count} HOMES` : "HOME";
-      this.popQueue.unshift({ label: `by ${event.builders.join(" & ")}`, points: event.count, unit: what, credit: true });
+      this.popQueue.unshift({ label: `by ${event.builders.map(name => displayName(name)).join(" & ")}`, points: event.count, unit: what, credit: true });
       return;
     }
     if (event.type === "disaster") {
       // Small destruction pulses pop out of the city like build points; only big hits get a banner.
       const lost = event.damageCount ?? 1;
       this.popQueue.unshift({ label: `${ATTACK_VERB[event.kind] ?? "ATTACK"} · ${event.reason ?? ""}`.trim(), points: -lost, unit: lost === 1 ? "HOME" : "HOMES" });
-      if (lost >= 3 || event.reason === "HATE") {
-        this.banner(`!! ${event.reason ?? ATTACK_VERB[event.kind] ?? "ATTACK"} !!`, "attack");
+      if (lost >= 3 || event.reason === "HATE" || event.natural) {
+        this.banner(event.natural ? `!! ${event.reason ?? "DISASTER"} · NO WARNING !!` : `!! ${event.reason ?? ATTACK_VERB[event.kind] ?? "ATTACK"} !!`, "attack");
         document.body.classList.remove("quake"); void document.body.offsetWidth; document.body.classList.add("quake");
       }
     } else if (event.type === "advancement") this.banner(`NEW ERA · ${event.name}`, "era");
+    else if (event.type === "regression") {
+      this.banner(`ERA LOST · BACK TO ${event.name}`, "attack");
+      document.body.classList.remove("quake"); void document.body.offsetWidth; document.body.classList.add("quake");
+    }
     else if (event.type === "boom") this.banner(`RAID! +${event.viewers} BUILDERS`, "raid");
   }
 
   private banner(text: string, kind: string) {
-    const banner = wavy(text, `banner banner-${kind}`);
-    this.bannerLayer.appendChild(banner);
-    setTimeout(() => banner.remove(), 3400);
+    // No alert banners anywhere: the city itself shows what happened (eras, attacks, raids).
+    void text; void kind;
   }
 
   private spawnPop(pop: { label: string; points: number; unit?: string; credit?: boolean }) {
-    const anchor = this.options.screenPoint();
+    // Chat points sparkle up all over town; build credits and wrecks stay where it happened.
+    const scattered = !pop.credit && !pop.unit ? this.options.scatterPoint?.() : undefined;
+    const anchor = scattered ?? this.options.screenPoint();
     const node = el("div", `pop ${pop.points >= 0 ? "pop-plus" : "pop-minus"}${pop.unit ? " pop-wreck" : ""}${pop.credit ? " pop-credit" : ""}`);
     node.append(el("span", "pop-points", `${pop.points >= 0 ? "+" : ""}${pop.points}${pop.unit ? ` ${pop.unit}` : ""}`), el("span", "pop-label", pop.label));
     // Fan pops out into six slots around the anchor so bursts never stack on top of each other.
-    const spread = this.options.overlay ? 60 : 110;
+    const spread = scattered ? 24 : this.options.overlay ? 60 : 110;
     const slot = this.slot++ % 6;
     const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
     const dx = (slot % 3 - 1) * spread * 1.1 + (Math.random() - 0.5) * spread * 0.3;

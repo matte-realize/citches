@@ -23,15 +23,33 @@ html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; backg
 /* Twitch overlay: no background, city tucked into a corner, nothing steals clicks from the player. */
 html.overlay, html.overlay body, html.overlay #app { background: transparent; }
 html.overlay body { pointer-events: none; }
-html.overlay #app { position: fixed; width: min(40vw, 70vh); height: min(34vw, 60vh); bottom: 11vh; right: 1.5vw; }
-html.overlay[data-corner="bl"] #app { right: auto; left: 1.5vw; }
+/*
+ * On a live stream the overlay must stay out of the way: a compact corner city with a slim
+ * scoreboard underneath. Sizes are shared variables so city, board and banners line up.
+ */
+/* --base clears Twitch's own control bar (play, volume, settings) along the bottom of the player. */
+html.overlay { --city-w: min(16vw, 29vh); --city-h: min(13.5vw, 25vh); --board-w: var(--city-w); --board-h: 17px; --edge: 1.2vw; --base: calc(max(56px, 8vh) + 30px); --dx: 0px; --dy: 0px; }
+html.overlay[data-size="small"] { --city-w: min(12vw, 22vh); --city-h: min(10vw, 19vh); }
+html.overlay[data-size="large"] { --city-w: min(22vw, 40vh); --city-h: min(19vw, 34vh); }
+/* Whole-page mode: the frame is the browser window, not the player. It keeps the same lift off
+   the bottom as player mode (clear of play/volume), and vw/vh are the whole window, so the same
+   on-screen size needs smaller fractions. */
+html.overlay[data-area="page"] { --base: 34px; --edge: 8px; --board-h: 21px; --city-w: min(18vw, 34vh); --city-h: min(15vw, 29vh); }
+html.overlay[data-area="page"][data-size="small"] { --city-w: min(13vw, 25vh); --city-h: min(11vw, 21vh); }
+html.overlay[data-area="page"][data-size="large"] { --city-w: min(24vw, 44vh); --city-h: min(20vw, 37vh); }
+/* Fullscreen video: the player's play/volume bar runs along the bottom, so rise above it.
+   Every --base leaves ~30px under the bar for the centred toolbar (move, zoom, follow, rotate). */
+html.overlay[data-area="page"][data-fullscreen="1"],
+html.overlay[data-area="page"][data-overstream="1"] { --base: calc(max(64px, 8vh) + 30px); --edge: 16px; }
+/* A roomier bar on the whole page. */
+html.overlay[data-area="page"] .scoreboard { height: 20px; }
+html.overlay[data-area="page"] .scoreboard .score-total { font-size: 12px; }
+html.overlay[data-area="page"] .scoreboard .meter { height: 7px; }
+html.overlay[data-area="page"] .scoreboard .meter-value { font-size: 8px; }
+html.overlay[data-area="page"] .scoreboard .meter-row::before { font-size: 7px; }
+html.overlay #app { position: fixed; width: var(--city-w); height: var(--city-h); bottom: calc(var(--base) + var(--board-h) - var(--dy)); right: calc(var(--edge) - var(--dx)); }
+html.overlay[data-corner="bl"] #app { right: auto; left: calc(var(--edge) + var(--dx)); }
 html.overlay[data-corner="center"] #app { right: 50%; transform: translateX(50%); }
-html.overlay[data-size="small"] #app { width: min(30vw, 54vh); height: min(26vw, 46vh); }
-html.overlay[data-size="large"] #app { width: min(52vw, 86vh); height: min(44vw, 74vh); }
-/* Inside the Twitch player: keep clear of the control bar along the bottom. */
-html.in-player #app { bottom: 96px; }
-html.in-player .scoreboard { bottom: 56px; }
-html.in-player .banner { bottom: calc(96px + min(34vw, 60vh) + 8px); }
 
 /* ---------- pixel panels ---------- */
 .pixel-box, .debug, .scoreboard, .status-chip {
@@ -63,17 +81,85 @@ html.overlay .status-chip { display: none; }
 }
 .view-controls button:hover { transform: translateY(-3px); color: var(--gold); }
 .view-controls button:active { transform: translateY(2px); }
-@media (max-width: 760px) { .view-controls { bottom: auto; top: 70px; } }
+.view-controls button.on { color: var(--gold); box-shadow: 0 -3px 0 var(--gold), 0 3px 0 var(--gold), -3px 0 0 var(--gold), 3px 0 0 var(--gold), inset 0 3px 0 var(--panel-hi), inset 0 -3px 0 #121925; }
+html:not(.overlay) #app { cursor: grab; }
+html:not(.overlay) #app.dragging { cursor: grabbing; }
+@media (max-width: 760px) { .view-controls { bottom: auto; top: 70px; flex-wrap: wrap; justify-content: flex-end; max-width: 160px; } }
+
+/* ---------- hall of fame banner ---------- */
+.hall {
+  position: fixed; left: 22px; bottom: 22px; width: 230px; padding: 0 0 10px;
+  background: var(--panel); color: var(--text);
+  box-shadow: 0 -3px 0 var(--ink), 0 3px 0 var(--ink), -3px 0 0 var(--ink), 3px 0 0 var(--ink), inset 0 3px 0 var(--panel-hi), inset 0 -3px 0 #121925, 6px 6px 0 rgba(0, 0, 0, .25);
+  animation: hall-in .8s .15s cubic-bezier(.3, 1.8, .5, 1) both;
+}
+/* A hanging pennant: the title bar has a notched tail. */
+.hall-title {
+  position: relative; display: flex; align-items: center; gap: 8px; padding: 9px 12px 8px; margin-bottom: 4px;
+  background: #7a3fd0; color: #fff4c8; font-family: var(--chunky); font-size: 10px; letter-spacing: .06em; text-shadow: 2px 2px 0 #3a1a70;
+  box-shadow: inset 0 3px 0 #9a63ee, inset 0 -3px 0 #5a2aa8;
+}
+.hall-crown { color: var(--gold); font-family: var(--pixel); font-size: 15px; animation: bob 2.4s ease-in-out infinite; }
+.hall-section { padding: 6px 12px 2px; }
+.hall-heading { display: flex; align-items: center; gap: 6px; font-family: var(--chunky); font-size: 8px; color: var(--muted); letter-spacing: .05em; }
+.hall-icon { color: var(--gold); font-family: var(--pixel); font-size: 11px; }
+.hall-section:nth-of-type(3) .hall-icon { color: #ff7ab8; }
+.hall-section:nth-of-type(4) .hall-icon { color: #ffe08a; }
+.hall-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.hall-row { display: flex; align-items: baseline; gap: 7px; padding: 2px 0; font-size: 13px; }
+.hall-row.hall-moved { animation: hall-rise .5s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes hall-rise { 0% { opacity: 0; transform: translateY(6px); } 100% { opacity: 1; transform: none; } }
+.hall-rank { width: 14px; font-family: var(--chunky); font-size: 8px; color: var(--muted); }
+.hall-rank-0 .hall-rank { color: var(--gold); }
+.hall-rank-0 .hall-name { color: var(--gold); }
+.hall-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hall-points { font-family: var(--chunky); font-size: 8px; color: var(--plus); }
+.hall-section:nth-of-type(3) .hall-points { color: #ff9ac8; }
+.hall-section:nth-of-type(4) .hall-points { color: #ffe08a; }
+.hall-empty { padding: 2px 0; font-size: 11px; color: var(--muted); opacity: .7; }
+.hall-totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 8px 12px 0; padding-top: 8px; border-top: 2px dashed #2a3850; }
+.hall-stat { display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; }
+.hall-stat b { font-family: var(--chunky); font-size: 10px; color: var(--text); font-weight: 400; font-variant-numeric: tabular-nums; }
+.hall-stat span { font-size: 9px; color: var(--muted); letter-spacing: .03em; }
+@keyframes hall-in { 0% { transform: translateX(-130%); } 100% { transform: none; } }
+html.overlay .hall { display: none; }
+@media (max-width: 980px) { .hall { display: none; } html:not(.overlay) .scoreboard .leaders-row { display: flex; } }
 
 /* ---------- scoreboard ---------- */
 .hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+/* Points and bars stay centred but slim; names live in the Hall of Fame banner on the left. */
 .scoreboard {
-  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
-  width: min(460px, calc(100vw - 40px)); padding: 12px 16px 12px;
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  width: min(400px, calc(100vw - 40px)); padding: 10px 14px 10px;
   animation: board-in .7s cubic-bezier(.3, 1.8, .5, 1) both;
 }
-html.overlay .scoreboard { left: auto; right: 1.5vw; transform: none; width: min(340px, 40vw); bottom: 2.2vh; padding: 9px 12px; animation-name: board-in-corner; }
-html.overlay[data-corner="bl"] .scoreboard { right: auto; left: 1.5vw; }
+html:not(.overlay) .scoreboard .leaders-row { display: none; }
+html:not(.overlay) .scoreboard .meter-row { margin-top: 7px; gap: 8px; }
+html:not(.overlay) .scoreboard .meter { height: 10px; }
+html:not(.overlay) .scoreboard .era-label, html:not(.overlay) .scoreboard .danger-label, html:not(.overlay) .scoreboard .capitol-label { min-width: 92px; max-width: 120px; font-size: 12px; }
+html:not(.overlay) .scoreboard .danger-label { font-size: 8px; }
+html:not(.overlay) .scoreboard .score-total { font-size: 22px; }
+html:not(.overlay) .scoreboard .command-hint { margin-top: 6px; font-size: 10px; }
+html.overlay .scoreboard { left: auto; right: calc(var(--edge) - var(--dx)); transform: none; width: var(--board-w); bottom: calc(var(--base) - var(--dy)); padding: 5px 8px; animation-name: board-in-corner; }
+html.overlay[data-corner="bl"] .scoreboard { right: auto; left: calc(var(--edge) + var(--dx)); }
+/* On stream the scoreboard is one slim bar under the city: score | era meter | danger meter. */
+html.overlay .scoreboard { display: flex; align-items: center; gap: 6px; height: 16px; padding: 0 6px; box-sizing: border-box; }
+html.overlay .scoreboard > * { margin-top: 0 !important; }
+html.overlay .scoreboard .story-line, html.overlay .scoreboard .upkeep-line, html.overlay .scoreboard .leaders-row,
+html.overlay .scoreboard .command-hint, html.overlay .scoreboard .capitol-row, html.overlay .scoreboard .score-caption,
+html.overlay .scoreboard .score-delta, html.overlay .scoreboard .era-label, html.overlay .scoreboard .danger-label { display: none !important; }
+html.overlay .scoreboard .score-row { flex: 0 0 auto; gap: 0; }
+html.overlay .scoreboard .score-total { margin-left: 0; font-size: 10px; text-shadow: 1px 1px 0 var(--gold-deep), 2px 2px 0 var(--ink); }
+html.overlay .scoreboard .meter-row { flex: 1 1 0; min-width: 0; gap: 4px; }
+html.overlay .scoreboard .meter-row:has(.era-meter) { flex-grow: 1.5; }
+html.overlay .scoreboard .meter-row::before { font-family: var(--chunky); font-size: 6px; color: var(--muted); }
+html.overlay .scoreboard .meter-row:has(.era-meter)::before { content: "ERA"; }
+html.overlay .scoreboard .meter-row:has(.danger-meter)::before { content: "RISK"; color: var(--danger); }
+html.overlay .scoreboard .meter { height: 5px; }
+html.overlay .scoreboard .meter-value { font-size: 7px; }
+/* Repairs and rebuilding float just above the bar while they run. */
+html.overlay .scoreboard .recovery-row { position: absolute; left: 0; bottom: calc(100% + 3px); white-space: nowrap; font-size: 8px; text-shadow: 1px 1px 0 var(--ink); }
+html.overlay .scoreboard .recovery-row { margin-top: 3px; font-size: 9px; }
 .score-row { display: flex; align-items: baseline; gap: 12px; }
 .score-caption { font-family: var(--chunky); font-size: 9px; color: var(--muted); letter-spacing: .06em; }
 .score-total {
@@ -81,7 +167,7 @@ html.overlay[data-corner="bl"] .scoreboard { right: auto; left: 1.5vw; }
   text-shadow: 3px 3px 0 var(--gold-deep), 5px 5px 0 var(--ink); font-variant-numeric: tabular-nums;
   transform-origin: 50% 80%;
 }
-html.overlay .score-total { font-size: 18px; }
+html.overlay .score-total { font-size: 14px; text-shadow: 2px 2px 0 var(--gold-deep), 3px 3px 0 var(--ink); }
 .score-total.bump-up { animation: bump-up .45s cubic-bezier(.3, 2.2, .5, 1); }
 .score-total.bump-down { animation: bump-down .5s ease-out; }
 .score-delta { min-width: 52px; text-align: right; font-family: var(--chunky); font-size: 10px; }
@@ -176,7 +262,7 @@ body.city-asleep .score-total { color: #b8c8ff; text-shadow: 3px 3px 0 #4a5a8a, 
 }
 .speech::after { content: ""; position: absolute; left: 50%; bottom: -12px; width: 9px; height: 9px; background: #f4ecd8; box-shadow: 3px 0 0 var(--ink), -3px 0 0 var(--ink), 0 3px 0 var(--ink); transform: translateX(-50%); }
 .speech-user { display: block; margin-bottom: 2px; font-family: var(--chunky); font-size: 8px; color: #7a3fd0; }
-html.overlay .speech { max-width: 190px; font-size: 12px; }
+html.overlay .speech { max-width: 150px; font-size: 10px; }
 @keyframes speech-life { 0% { opacity: 0; transform: translate(-50%, -80%) scale(.4); } 8% { opacity: 1; transform: translate(-50%, -100%) scale(1.08); } 14% { transform: translate(-50%, -100%) scale(1); } 88% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -120%); } }
 
 .leaders-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; overflow: hidden; white-space: nowrap; }
@@ -187,8 +273,8 @@ html.overlay .speech { max-width: 190px; font-size: 12px; }
 .leader-0 .leader-name { color: var(--gold); }
 .leader-0::before { content: "♛"; color: var(--gold); }
 .pop-wreck { animation-duration: 2.4s; }
-html.overlay .pop-points { font-size: 12px; }
-html.overlay .pop-label { font-size: 12px; }
+html.overlay .pop-points { font-size: 10px; }
+html.overlay .pop-label { font-size: 10px; }
 
 /* ---------- banners ---------- */
 .banner {
@@ -196,7 +282,8 @@ html.overlay .pop-label { font-size: 12px; }
   font-family: var(--chunky); font-size: clamp(16px, 3vw, 30px); letter-spacing: .04em;
   animation: banner-life 3.4s ease-in forwards;
 }
-html.overlay .banner { top: auto; bottom: calc(11vh + min(34vw, 60vh) + 8px); left: auto; right: 1.5vw; transform: none; font-size: clamp(12px, 1.8vw, 20px); }
+html.overlay .banner { top: auto; bottom: calc(var(--base) + var(--board-h) + var(--city-h) + 6px - var(--dy)); left: auto; right: calc(var(--edge) - var(--dx)); transform: none; font-size: clamp(10px, 1.3vw, 16px); }
+html.overlay[data-corner="bl"] .banner { right: auto; left: calc(var(--edge) + var(--dx)); }
 .wave-letter { display: inline-block; animation: wave .9s cubic-bezier(.3, 2, .5, 1) both, bob 1.2s ease-in-out .9s infinite; }
 .banner-attack { color: var(--minus); text-shadow: 3px 3px 0 var(--minus-deep), 6px 6px 0 var(--ink); }
 .banner-era { color: var(--gold); text-shadow: 3px 3px 0 var(--gold-deep), 6px 6px 0 var(--ink); }
@@ -240,3 +327,80 @@ body.quake .city-canvas { animation: quake .6s steps(8); }
   .status-chip { display: none; }
   .era-label, .danger-label { min-width: 84px; font-size: 11px; }
 }
+.notice-moveOut { color: #c9b8a0; font-size: 12px; }
+.notice-moveIn { color: #9ff0b8; }
+
+/* A full danger meter is an attack massing: the bar churns red to violet and counts down. */
+.danger-meter.massing { box-shadow: 0 0 0 2px #0a0d12, 0 0 12px 2px rgba(224, 50, 50, .7); animation: shake .4s steps(3) infinite; }
+.danger-meter.massing .danger-fill {
+  width: 100% !important;
+  background: repeating-linear-gradient(90deg, #ff4a3a 0 12px, #b04aff 12px 24px, #ff8a3a 24px 36px);
+  background-size: 72px 100%; animation: massing-churn .6s linear infinite, massing-hue 2.4s linear infinite;
+}
+@keyframes massing-churn { to { background-position: 72px 0; } }
+@keyframes massing-hue { 0%, 100% { filter: hue-rotate(0deg) brightness(1); } 50% { filter: hue-rotate(-40deg) brightness(1.35); } }
+body.attack-incoming .danger-label { color: #ff6b6b; animation: blink .5s steps(2) infinite; }
+body.attack-incoming::after {
+  content: ""; position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  box-shadow: inset 0 0 90px 10px rgba(200, 30, 60, .35); animation: incoming-pulse 1.4s ease-in-out infinite;
+}
+html.overlay body.attack-incoming::after { box-shadow: none; }
+@keyframes incoming-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* Late-joiner catch-up: a small chip while the city's past is rebuilt (rendering is paused). */
+.catch-up {
+  position: fixed; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 30;
+  padding: 10px 16px; font-family: var(--chunky); font-size: 11px; letter-spacing: .08em;
+  color: #fff7d6; background: rgba(28, 22, 48, .88); border: 3px solid #fff7d6; box-shadow: 4px 4px 0 rgba(0,0,0,.45);
+}
+.catch-up[hidden] { display: none; }
+
+/* ?scene - the stream scene (OBS browser source): city, progress bar and Hall of Fame only. */
+html.scene .debug, html.scene .view-controls, html.scene .status-chip { display: none; }
+html.scene #app { cursor: default; }
+
+/*
+ * Overlay popups: the city is a small corner widget on someone else's stream, so every popup is
+ * scaled to it (roughly half the web app's size, thinner outlines) and never covers the stream.
+ */
+html.overlay .speech { max-width: 110px; padding: 3px 5px 4px; font-size: 8px; line-height: 1.2; box-shadow: 0 -2px 0 var(--ink), 0 2px 0 var(--ink), -2px 0 0 var(--ink), 2px 0 0 var(--ink); }
+html.overlay .speech::after { bottom: -7px; width: 5px; height: 5px; box-shadow: 2px 0 0 var(--ink), -2px 0 0 var(--ink), 0 2px 0 var(--ink); }
+html.overlay .speech-user { font-size: 6px; margin-bottom: 1px; }
+html.overlay .pop { gap: 3px; }
+html.overlay .pop-points, html.overlay .pop-label, html.overlay .pop-credit .pop-label { font-size: 8px; }
+html.overlay .pop-wreck .pop-points { font-size: 9px; }
+html.overlay .pop-plus { text-shadow: 1px 1px 0 var(--plus-deep), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink), 2px 2px 0 var(--ink); }
+html.overlay .pop-minus { text-shadow: 1px 1px 0 var(--minus-deep), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink), 2px 2px 0 var(--ink); }
+html.overlay .pop-credit { text-shadow: 1px 1px 0 var(--gold-deep), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink), 2px 2px 0 var(--ink); }
+html.overlay .notice { padding: 2px 5px; font-size: 8px; box-shadow: 0 0 0 1px var(--ink); }
+html.overlay .notice-broke, html.overlay .notice-nohome, html.overlay .notice-moveOut { font-size: 7px; }
+html.overlay .notice-cost { font-size: 6px; }
+html.overlay .zzz { font-size: 8px; }
+html.overlay .banner { font-size: clamp(8px, 1vw, 12px); }
+html.overlay .banner-attack, html.overlay .banner-era, html.overlay .banner-raid { text-shadow: 2px 2px 0 var(--ink); }
+/* The offline sign floats above the bar, like the repair line, instead of breaking it. */
+html.overlay .scoreboard .sleep-sign { position: absolute; left: 0; bottom: calc(100% + 3px); margin: 0; padding: 2px 5px; gap: 4px; font-size: 6px; white-space: nowrap; }
+html.overlay .scoreboard .sleep-moon { font-size: 8px; }
+
+/* Standalone overlay preview (?overlay=1 opened directly, e.g. for recording a demo): a plain
+   stand-in for the stream behind the city, instead of a blank white page. */
+html.overlay.preview, html.overlay.preview body { background: radial-gradient(ellipse at 50% 40%, #2b3a4f 0%, #141c28 70%, #0b1018 100%); }
+
+html.overlay .banner { font-size: clamp(9px, 1.1vw, 14px); }
+/* Catching up on the city's history: a small chip just above the bar, not mid-screen. */
+html.overlay .catch-up { top: auto; left: auto; right: calc(var(--edge) - var(--dx)); bottom: calc(var(--base) + var(--board-h) + 6px - var(--dy)); transform: none; padding: 4px 8px; font-size: 8px; border-width: 2px; box-shadow: 2px 2px 0 rgba(0,0,0,.45); }
+html.overlay[data-corner="bl"] .catch-up { right: auto; left: calc(var(--edge) + var(--dx)); }
+
+/* Big-screen layout: camera buttons centred along the bottom, the points board just above them,
+   and the CHAT CITY panel down in the bottom-right, so the top of the screen is all city. */
+html:not(.overlay) .view-controls { left: 50%; right: auto; bottom: 16px; top: auto; transform: translateX(-50%); max-width: none; flex-wrap: nowrap; justify-content: center; }
+html:not(.overlay) .scoreboard { bottom: 84px; }
+html:not(.overlay) .debug { top: auto; left: auto; right: 22px; bottom: 22px; }
+/* The CHAT CITY panel now sits at the bottom, so its civilization menu opens upward. */
+html:not(.overlay) .debug .pixel-select-list { top: auto; bottom: calc(100% + 6px); }
+/* ?clean: just the city, for cinematic shots. */
+html.clean .scoreboard, html.clean .hall, html.clean .debug, html.clean .view-controls, html.clean .status-chip, html.clean .catch-up { display: none !important; }
+/* Demo / idle recordings: no visible mouse pointer anywhere, even while dragging or over buttons. */
+html.no-cursor, html.no-cursor * { cursor: none !important; }
+/* ?intro: the opening shot fades up from black. */
+.intro-curtain { position: fixed; inset: 0; z-index: 50; background: #000; pointer-events: none; }

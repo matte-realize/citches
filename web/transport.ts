@@ -8,18 +8,41 @@ export interface CityFeed { start(onTick: (tick: CityTick) => void, onStatus: (s
 /** Local backend (npm run live / replay) over WebSocket. */
 export class WebSocketFeed implements CityFeed {
   private socket?: WebSocket;
+  private stopped = false;
+  private retryMs = 1000;
+  private hasHistory = false;
+  private retryTimer?: ReturnType<typeof setTimeout>;
   constructor(private url: string) {}
+  /** Connects, and quietly keeps reconnecting (with backoff) if the backend restarts or drops. */
   start(onTick: (tick: CityTick) => void, onStatus: (status: string) => void) {
+    if (this.stopped) return;
     const socket = new WebSocket(this.url);
     this.socket = socket;
-    socket.onopen = () => onStatus("CONNECTED");
+    let opened = false;
+    socket.onopen = () => { opened = true; this.retryMs = 1000; onStatus("CONNECTED"); };
     socket.onmessage = message => {
       const data = JSON.parse(message.data);
-      if (data.type === "tick") onTick(data);
+      if (data.type === "history") {
+        // The whole past arrives as one batch; after a reconnect the city already holds it.
+        const latest = data.latest as CityTick | undefined;
+        onTick({ ...latest, type: "tick", events: this.hasHistory ? [] : data.events as SimEvent[], replay: true });
+        return;
+      }
+      if (data.type !== "tick") return;
+      // The backend replays its history to every new connection; after a reconnect the city
+      // already holds it, so only the latest score is taken from the replay.
+      if (data.replay && this.hasHistory) { onTick({ ...data, events: [] }); return; }
+      onTick(data);
     };
-    socket.onclose = () => onStatus("OFFLINE · TRY ?demo=1");
+    socket.onclose = () => {
+      if (opened) this.hasHistory = true;
+      if (this.stopped) return;
+      onStatus("OFFLINE · RECONNECTING");
+      this.retryTimer = setTimeout(() => this.start(onTick, onStatus), this.retryMs);
+      this.retryMs = Math.min(15_000, this.retryMs * 1.6);
+    };
   }
-  stop() { this.socket?.close(); }
+  stop() { this.stopped = true; clearTimeout(this.retryTimer); this.socket?.close(); }
 }
 
 type TwitchExt = {
@@ -68,8 +91,7 @@ export class TwitchExtensionFeed implements CityFeed {
       try {
         const response = await fetch(`${base.replace(/\/$/, "")}/snapshot`, { headers: { Authorization: `Bearer ${auth.token}` } });
         const snapshot = await response.json() as { history: Array<{ events: SimEvent[] }>; latest?: CityTick };
-        for (const tick of snapshot.history) onTick({ type: "tick", events: tick.events, replay: true });
-        if (snapshot.latest) onTick({ ...snapshot.latest, events: [], replay: true });
+        onTick({ ...snapshot.latest, type: "tick", events: snapshot.history.flatMap(tick => tick.events), replay: true });
       } catch { onStatus("LIVE · NO SNAPSHOT"); }
     });
     ext.listen("broadcast", (_target, _type, message) => {
@@ -100,10 +122,12 @@ const PASTA = "this city is fake and the mayor is a cardboard cutout";
 export class DemoFeed implements CityFeed {
   private timers: Array<ReturnType<typeof setInterval>> = [];
   private aggregator?: Aggregator;
-  constructor(private speed = 1) {}
+  /** `levelUp` multiplies era progress so a short demo reaches new eras (1 = real pace). */
+  constructor(private speed = 1, private levelUp = 1) {}
   start(onTick: (tick: CityTick) => void, onStatus: (status: string) => void) {
     onStatus("DEMO CHAT");
     const mapper = new EventMapper();
+    mapper.technologyBoost = this.levelUp;
     this.aggregator = new Aggregator((aggregate, delta, raidViewers, signals) => {
       const events = mapper.map(aggregate, delta, raidViewers, signals);
       onTick({ type: "tick", aggregate, events, progress: mapper.progress, score: mapper.score });
